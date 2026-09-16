@@ -1,0 +1,17 @@
+name: livefire
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  grounded:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: ./
+        with:
+          path: livefire_demo.py
+          version: source
+          fail-on: smell
