@@ -34,10 +34,13 @@ runs:
       run: echo "::add-matcher::${{ github.action_path }}/.github/grounded-problem-matcher.json"
     - name: Scan
       shell: bash
+      # NOTE: hyphenated input names REQUIRE bracket notation here.
+      # `inputs.fail-on` parses as arithmetic (fail minus on) and
+      # silently expands to empty, which broke v0.3.0's first live run.
       run: |
-        ARGS=("${{ inputs.path }}" --fail-on "${{ inputs.fail_on }}" --no-color)
+        ARGS=("${{ inputs.path }}" --fail-on "${{ inputs['fail-on'] }}" --no-color)
         [ -n "${{ inputs.baseline }}" ] && ARGS+=(--baseline "${{ inputs.baseline }}")
-        [ -n "${{ inputs.changed-base }}" ] && ARGS+=(--changed "${{ inputs.changed-base }}")
+        [ -n "${{ inputs['changed-base'] }}" ] && ARGS+=(--changed "${{ inputs['changed-base'] }}")
         grounded scan "${ARGS[@]}"
 branding:
   icon: search

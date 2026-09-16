@@ -519,6 +519,15 @@ class TestRepoFiles(unittest.TestCase):
         action = (root / "action.yml").read_text()
         self.assertIn("grounded-problem-matcher.json", action)
         self.assertIn("composite", action)
+
+    def test_action_no_dot_notation_hyphen_inputs(self):
+        # Regression: `${{ inputs.fail-on }}` parses as arithmetic and
+        # expands empty. Hyphenated inputs require bracket notation.
+        import re
+        root = Path(__file__).resolve().parent.parent
+        action = (root / "action.yml").read_text()
+        bad = re.findall(r"\$\{\{\s*inputs\.[A-Za-z0-9_]+-[A-Za-z0-9_-]*", action)
+        self.assertEqual(bad, [])
         hooks = (root / ".pre-commit-hooks.yaml").read_text()
         self.assertIn("grounded scan", hooks)
 
