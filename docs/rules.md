@@ -200,6 +200,19 @@ JavaScript/TypeScript. Commented-out code is covered by
   remain out of scope.
 * In doc examples, toolchain calls (`fmt.Printf`, `Promise.reject`),
   JS control keywords used as calls (`catch (e)`), and `this`-rooted
-  calls stay silent.
+  calls stay silent. Names bound inside the example (definitions,
+  imports, destructured fixture parameters such as `async ({ page }) =>`)
+  and blocks carrying doc-tooling directives (`// @noErrors`,
+  `/// file:`, `---cut---`) are treated as illustrative. Documentation
+  highlight markers (`+++`/`---`) are stripped before identifiers are
+  extracted, so an annotated example parses like the code it shows.
+* **A partial scan never claims absence for what it did not index.** A
+  relative import that resolves *above* the scan root (a monorepo's
+  sibling package when scanning `src/lib`, say) stays silent, exactly
+  like a target under a scan-ignored directory. Sub-tree and single-file
+  scans are first-class agent workflows and must not manufacture lies
+  about files outside their snapshot. Practical consequence: scanning a
+  subdirectory can only ever report fewer findings than scanning its
+  enclosing root, never more.
 * `grounded fix` rewrites stale file paths only on unambiguous
   same-basename matches in comments (never docstrings, never ties).

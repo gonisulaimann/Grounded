@@ -2904,5 +2904,173 @@ class TestImpact(unittest.TestCase):
             self.assertEqual(payload["summary"]["findings"], 0)
 
 
+class TestSubTreeScanOpacity(unittest.TestCase):
+    """A partial snapshot must never manufacture absence claims about
+    files it did not look at.
+
+    Measured (OmniRoute, 2026-09-22): scanning `src/` reported 51
+    stale-import lies whose targets (`../../shared/...`,
+    `../../../open-sse/...`) exist one level above the scan root; the
+    same tree scanned from the repo root reported 3. Sub-tree and
+    single-file scans are first-class agent workflows, so this class is
+    load-bearing for the advertised lint loop.
+    """
+
+    def test_relative_import_above_scan_root_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "shared" / "services").mkdir(parents=True)
+            (root / "shared" / "services" / "cliRuntime.ts").write_text(
+                "export const getCliConfigPaths = () => [];\n", encoding="utf-8")
+            (root / "src" / "lib").mkdir(parents=True)
+            (root / "src" / "lib" / "app.ts").write_text(
+                'import { getCliConfigPaths } from "../../shared/services/cliRuntime";\n'
+                "export const paths = getCliConfigPaths;\n", encoding="utf-8")
+            findings, _, _ = scan_root(root / "src", Config())
+            self.assertEqual([f for f in findings if f.checker == "stale-import"], [])
+
+    def test_whole_tree_scan_agrees_with_subtree_scan(self):
+        # The guard must not depend on where the scan started: both roots
+        # see the target (or neither does), so neither reports a lie.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "shared").mkdir()
+            (root / "shared" / "cliRuntime.ts").write_text("export const a = 1;\n", encoding="utf-8")
+            (root / "src").mkdir()
+            (root / "src" / "app.ts").write_text(
+                'import { a } from "../shared/cliRuntime";\n', encoding="utf-8")
+            findings, _, _ = scan_root(root, Config())
+            self.assertEqual([f for f in findings if f.checker == "stale-import"], [])
+
+    def test_missing_relative_import_inside_root_still_reports(self):
+        # Control: the escape guard must not disarm in-tree detection.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "app.ts").write_text('import { x } from "./gone";\n', encoding="utf-8")
+            findings, _, _ = scan_root(root, Config())
+            self.assertTrue([f for f in findings if f.checker == "stale-import"])
+
+
+class TestGhostExportSuppression(unittest.TestCase):
+    def _scan(self, root):
+        return scan_root(root, Config(enabled={"ghost-export"}))[0]
+
+    def test_use_after_inline_block_comment_is_seen(self):
+        # svelte html.js: `reg_exp_entity` is called on a line that opens
+        # with `/** @param {any} entity_name */`. Blanking that whole line
+        # as a comment hid the call, so a live function read as dead.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "html.js").write_text(
+                "function reg_exp_entity(entity_name, is_attribute_value) {\n"
+                "\treturn entity_name;\n"
+                "}\n"
+                "\n"
+                "function get_entity_pattern(is_attribute_value) {\n"
+                "\treturn Object.keys(entities).map(\n"
+                "\t\t/** @param {any} entity_name */ (entity_name) => "
+                "reg_exp_entity(entity_name, is_attribute_value)\n"
+                "\t);\n"
+                "}\n",
+                encoding="utf-8")
+            out = self._scan(root)
+            self.assertEqual([f for f in out if f.claim == "`reg_exp_entity`"], [])
+
+    def test_truly_unused_function_still_reports(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "dead.js").write_text(
+                "function deadFunction(a) {\n\treturn a;\n}\n", encoding="utf-8")
+            out = self._scan(root)
+            self.assertTrue([f for f in out if f.claim == "`deadFunction`"])
+
+    def test_generated_expected_output_is_silent(self):
+        # svelte tests/snapshot/samples/*/_expected/: compiler output, not
+        # authored surface. Reachability of generated code is unknowable.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            d = root / "tests" / "snapshot" / "samples" / "x" / "_expected" / "client"
+            d.mkdir(parents=True)
+            (d / "index.svelte.js").write_text(
+                "function $$render() {\n\treturn 1;\n}\n", encoding="utf-8")
+            out = self._scan(root)
+            self.assertEqual(out, [])
+
+    def test_jest_snapshot_dir_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            d = root / "__snapshots__"
+            d.mkdir()
+            (d / "a.test.js.snap.js").write_text(
+                "function snapHelper() {\n\treturn 1;\n}\n", encoding="utf-8")
+            out = self._scan(root)
+            self.assertEqual(out, [])
+
+
+class TestDocRefPrecision(unittest.TestCase):
+    def _doc(self, root, text):
+        (root / "guide.md").write_text(text, encoding="utf-8")
+        return scan_root(root, Config(enabled={"stale-doc-ref"}))[0]
+
+    def test_diff_annotated_bindings_are_known(self):
+        # svelte annotates doc examples with `+++`/`---`. The markers broke
+        # identifier extraction (`function add(+++getA, getB+++)` binds
+        # nothing), turning bound params into phantom calls.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = self._doc(root,
+                "```js\n"
+                "function add(+++getA, getB+++) {\n"
+                "\treturn +++() => getA() + getB()+++;\n"
+                "}\n"
+                "```\n")
+            self.assertEqual([f for f in out if f.checker == "stale-doc-ref"], [])
+
+    def test_destructured_fixture_param_is_known(self):
+        # Playwright fixtures arrive destructured: `({ page }) =>`.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = self._doc(root,
+                "```js\n"
+                "test('home', async ({ page }) => {\n"
+                "\tawait page.goto('/');\n"
+                "});\n"
+                "```\n")
+            self.assertEqual([f for f in out if f.checker == "stale-doc-ref"], [])
+
+    def test_platform_roots_are_ambient(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = self._doc(root,
+                "```js\n"
+                "customElements.define('x-el', class extends HTMLElement {});\n"
+                "```\n")
+            self.assertEqual([f for f in out if f.checker == "stale-doc-ref"], [])
+
+    def test_directive_blocks_are_illustrative(self):
+        # `// @noErrors` and `/// file:` are doc-tooling directives: the
+        # docs themselves declare the code is not project surface.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = self._doc(root,
+                "```js\n"
+                "// @noErrors\n"
+                "preprocess: [\n"
+                "\tvitePreprocess(),\n"
+                "]\n"
+                "```\n")
+            self.assertEqual([f for f in out if f.checker == "stale-doc-ref"], [])
+
+    def test_missing_repo_symbol_still_reports(self):
+        # Control: an example calling a symbol this repo really lacks.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = self._doc(root,
+                "```js\n"
+                "const result = vanishedHelper(41);\n"
+                "```\n")
+            self.assertTrue([f for f in out if f.checker == "stale-doc-ref"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -301,20 +301,38 @@ def _code_text(facts: FileFacts) -> str:
     If a name appears in code (param, local, attribute, import), a comment
     mentioning it is not a dangling reference. Approximate but sound in one
     direction: it only ever suppresses, and trailing-code lines are kept.
+
+    A block-comment *line* may still carry real code after the comment
+    closes on the same line (`/** @param {T} x */ (x) => use(x)`).
+    Blanking such a line hid the use and produced phantom absences
+    (measured: svelte's `html.js` `reg_exp_entity`, called two lines below
+    its definition behind an inline `/** @param ... */`, reported as a
+    ghost export). The comment span is stripped, the code after it stays.
     """
     skip: set[int] = set()
+    keep: dict[int, str] = {}
     for c in facts.comments:
         for ln in range(c.line, c.end_line + 1):
             if 1 <= ln <= len(facts.lines):
-                s = facts.lines[ln - 1].strip()
+                line = facts.lines[ln - 1]
+                s = line.strip()
                 if facts.language == "python":
                     if s.startswith("#"):
                         skip.add(ln)
                 else:
-                    if s.startswith(("//", "/*", "*", "*/")):
+                    if s.startswith("//"):
                         skip.add(ln)
-    return "\n".join(
-        ln for i, ln in enumerate(facts.lines, start=1) if i not in skip)
+                    elif s.startswith(("/*", "*", "*/")):
+                        rest = line.split("*/", 1)[1] if "*/" in line else ""
+                        if rest.strip():
+                            keep[ln] = rest
+                        else:
+                            skip.add(ln)
+    out: list[str] = []
+    for i, ln in enumerate(facts.lines, start=1):
+        if i not in skip:
+            out.append(keep.get(i, ln))
+    return "\n".join(out)
 
 
 def _appears_in_code(name: str, code: str) -> bool:
@@ -860,6 +878,26 @@ def _base_in_ignored_dir(base: str) -> bool:
     return False
 
 
+def _target_escapes_root(base: str) -> bool:
+    """True when a resolved candidate path leaves the scanned tree.
+
+    A specifier that walks above the scan root resolves against files the
+    snapshot never indexed (a monorepo's sibling package, the repo root's
+    own trees). Their existence cannot be judged from the snapshot, so
+    reporting "does not exist" is never positive evidence — the same
+    verdict as a scan-ignored directory. Mechanical and suppression-only:
+    it can only remove findings, never invent one.
+
+    Measured (OmniRoute, 2026-09-22): scanning `src/` reported 51
+    stale-import lies for `../../shared/...` and `../../../open-sse/...`
+    specifiers whose targets exist one level above the root; the same
+    tree scanned from the repo root reported 3. Sub-tree and single-file
+    scans are first-class agent workflows, so a partial snapshot must
+    never manufacture absence claims about what it did not look at.
+    """
+    return base == ".." or base.startswith("../")
+
+
 def _js_target_in_ignored_dir(index: RepoIndex, claimer: str, spec: str) -> bool:
     """True when a (relative) specifier's candidate targets sit under a
     directory suffix the scan deliberately ignores (vendor, build, dist,
@@ -882,8 +920,11 @@ def _resolve_js_target(index: RepoIndex, claimer: str, spec: str) -> list[str] |
     (skip) or a possibly-empty list (empty = module does not exist).
     """
     if spec.startswith("./") or spec.startswith("../"):
-        return _js_candidates(index, posixpath.normpath(
-            posixpath.join(posixpath.dirname(claimer), spec)))
+        base = posixpath.normpath(
+            posixpath.join(posixpath.dirname(claimer), spec))
+        if _target_escapes_root(base):
+            return None  # above the scan root: outside the snapshot
+        return _js_candidates(index, base)
     for zone_dir, mapping in index.alias_zones:
         if zone_dir and not (claimer == zone_dir or claimer.startswith(zone_dir + "/")):
             continue
@@ -898,7 +939,7 @@ def _resolve_js_target(index: RepoIndex, claimer: str, spec: str) -> list[str] |
                     continue  # types-only or dep mappings: outside the snapshot
                 external_only = False
                 base = posixpath.normpath(posixpath.join(zone_dir, repl, rest)) if zone_dir else posixpath.normpath(repl + rest)
-                if _base_in_ignored_dir(base):
+                if _base_in_ignored_dir(base) or _target_escapes_root(base):
                     # Alias mapped into a scan-ignored dir (seen: OmniRoute
                     # `@omniroute/open-sse/*` reaching tracked vendor code):
                     # existence is unknowable from the snapshot — never a
@@ -1387,7 +1428,11 @@ _DOC_JS_AMBIENT_ROOTS = frozenset({
     "Set", "WeakMap", "WeakSet", "parseFloat", "parseInt", "isNaN",
     "isFinite", "encodeURI", "decodeURI", "encodeURIComponent",
     "decodeURIComponent", "CustomEvent", "Event", "EventTarget",
-    "MessageEvent",
+    "MessageEvent", "customElements", "CSS", "getComputedStyle",
+    "matchMedia", "requestAnimationFrame", "cancelAnimationFrame",
+    "IntersectionObserver", "ResizeObserver", "MutationObserver",
+    "WebSocket", "DocumentFragment", "Element", "HTMLElement",
+    "Node", "NodeList", "DOMException", "BroadcastChannel",
 } | set(JS_GLOBALS))
 
 # Bare call names that are JS control syntax, never references
@@ -1421,9 +1466,19 @@ def _doc_fence_blocks(lines: list[str]) -> list[tuple[str, int, int]]:
     return out
 
 
+# Documentation-tooling directives that declare an example exempt from
+# execution/typechecking (`// @noErrors`, `/// file:` region markers,
+# svelte's `---cut---`). The docs themselves state the code is not real
+# project surface, so nothing in the block is a claim about the repo.
+_DOC_ILLUSTRATIVE_DIRECTIVES = re.compile(
+    r"(@noErrors|@errors\b|///\s*file:|---\s*cut\s*---)", re.IGNORECASE)
+
+
 def _doc_block_is_illustrative(block: list[str]) -> bool:
     text = "\n".join(block)
     if "..." in text or "…" in text:
+        return True
+    if _DOC_ILLUSTRATIVE_DIRECTIVES.search(text):
         return True
     for line in block:
         s = line.strip()
@@ -1432,9 +1487,28 @@ def _doc_block_is_illustrative(block: list[str]) -> bool:
     return False
 
 
+_DOC_DIFF_MARKER = re.compile(r"\s*[+-]{3}\s*")
+
+
+def _strip_doc_diff_markers(line: str) -> str:
+    """Remove documentation diff/highlight annotations (`+++added+++`,
+    `---removed---`). They are presentation markup, not code: left in
+    place they corrupt identifier extraction (`function add(+++getA, …)`
+    binds nothing) and turn locally bound names into phantom calls.
+    Measured: 12 stale-doc-ref lies on svelte's docs, every one of them in
+    an annotated block. Applied only when a marker is present, so ordinary
+    code lines are passed through untouched.
+    """
+    if "+++" not in line and "---" not in line:
+        return line
+    return _DOC_DIFF_MARKER.sub(" ", line)
+
+
 def _doc_block_known(block: list[str], language: str) -> set[str]:
     """Names bound inside the example itself (definitions, assignments,
-    imports, decorator roots): using them proves nothing about the repo."""
+    imports, destructuring, decorator roots): using them proves nothing
+    about the repo."""
+    block = [_strip_doc_diff_markers(ln) for ln in block]
     known: set[str] = set()
     pats: list[str] = []
     if language == "python":
@@ -1489,7 +1563,7 @@ def _doc_block_known(block: list[str], language: str) -> set[str]:
                     r"|\(([^()]*)\)\s*=>", line):
                 params = pm.group(1) if pm.group(1) is not None else pm.group(2)
                 for p in (params or "").split(","):
-                    pname = re.split(r"[:=]", p.strip(), 1)[0].strip().lstrip("...")
+                    pname = re.split(r"[:=]", p.strip(), maxsplit=1)[0].strip().lstrip("...")
                     if re.fullmatch(r"[A-Za-z_$][\w$]*", pname or ""):
                         known.add(pname)
     for line in block:
@@ -1512,6 +1586,17 @@ def _doc_block_known(block: list[str], language: str) -> set[str]:
             m2 = re.match(r"^\s*(?:[A-Za-z_.]+\s+)?\"([\w./-]+)\"\s*$", line)
             if m2:
                 known.add(m2.group(1).rstrip("/").split("/")[-1])
+    # Destructured bindings: `const { a, b } = x`, `({ page }) =>`,
+    # `[first, ...rest] = list`. Test-fixture params are almost always
+    # destructured (`async ({ page }) =>`) and were invisible to the
+    # paren-param patterns, so `page.goto()` reported as a repo lie
+    # (measured: svelte's Playwright testing guide).
+    for line in block:
+        for dm in re.finditer(r"(?:\{|\[)([^{}\[\]]*)(?:\}|\])", line):
+            for part in dm.group(1).split(","):
+                name = re.split(r"[:=]", part.strip(), maxsplit=1)[0].strip().lstrip("...")
+                if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name or ""):
+                    known.add(name)
     return known
 
 
@@ -1545,7 +1630,14 @@ def check_stale_doc_ref(facts: FileFacts, index: RepoIndex) -> list[Finding]:
         known = _doc_block_known(block, lang) | file_known
         if lang == "javascript" and declared is None:
             from .repo_index import _norm_dist as _nd
-            declared = {_nd(x) for x in index.declared_dependencies(facts.path)}
+            # `declared_dependencies` returns None when no manifest exists
+            # anywhere above the file. Iterating that None raised inside the
+            # checker, and the scanner swallows checker exceptions — so
+            # stale-doc-ref was silently disabled on every manifest-less
+            # tree (bare docs repo, fixture). Absence of a manifest is an
+            # empty declared set, not a crash: report what is provably
+            # missing instead of going dark.
+            declared = {_nd(x) for x in (index.declared_dependencies(facts.path) or ())}
             loose_declared = {_loose_dist(x) for x in declared}
         for off, line in enumerate(block):
             lineno = start + off
@@ -1554,7 +1646,7 @@ def check_stale_doc_ref(facts: FileFacts, index: RepoIndex) -> list[Finding]:
                 continue
             if s.startswith("."):
                 continue  # continuation chain (.then/.catch): receiver above
-            code = _strip_doc_strings(line)
+            code = _strip_doc_strings(_strip_doc_diff_markers(line))
             for m in _DOC_CALL.finditer(code):
                 full = m.group(1)
                 base = full.split(".")[-1].lstrip("$")
@@ -1728,6 +1820,14 @@ def check_stale_contract_ref(facts: FileFacts, index: RepoIndex) -> list[Finding
 _GHOST_ALL = re.compile(r"__all__\s*=\s*\[[^\]]*\]")
 _GHOST_TEST_FILE = re.compile(r"^(test_.*|.*_test)\.(py|go)$|\.(test|spec)\.[A-Za-z0-9]+$")
 
+# Expected-output and generated paths: reachability cannot be judged for
+# code a generator emits, so neither can "nobody can reach it". Covers
+# svelte's `tests/snapshot/samples/*/_expected/`, jest/vitest
+# `__snapshots__/`, and the usual codegen directory names.
+_GHOST_GENERATED_PATH = re.compile(
+    r"(^|/)(_expected|__snapshots__|snapshots|generated|codegen)(/|$)"
+    r"|\.(gen|generated)\.[A-Za-z0-9]+$")
+
 
 def _ghost_importers(symbol: str, own: str, index: RepoIndex) -> bool:
     for rel, names in index.file_imports.items():
@@ -1791,6 +1891,8 @@ def check_ghost_export(facts: FileFacts, index: RepoIndex) -> list[Finding]:
     """
     if facts.language not in ("python", "javascript", "go"):
         return []
+    if _GHOST_GENERATED_PATH.search(facts.path):
+        return []  # generated/expected output: reachability is unknowable
     findings: list[Finding] = []
     code = _code_text(facts)
     full_text = "\n".join(facts.lines)

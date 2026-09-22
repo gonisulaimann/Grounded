@@ -12,13 +12,42 @@ All notable changes to `grounded` are documented here. Format follows
 - Go stdlib roots (`fmt`, `time`, `os`, …) silent in doc examples.
 - Same-package cross-file Go/C calls suppress ghost findings;
   mutually exclusive `//go:build` variants never flagged.
+- `stale-import` no longer claims a module is missing when the specifier
+  resolves **above the scan root**. Sub-tree and single-file scans (the
+  advertised agent loop) manufactured 51 lies on OmniRoute's `src/lib`
+  for `../../shared/...` and `../../../open-sse/...` targets that exist
+  one level up; the same tree scanned from the repo root reported 3, and
+  now both agree. Applied to the relative and alias resolution arms.
+- `ghost-export` no longer hides a live use that sits on a line opening
+  with an inline block comment (`/** @param {T} x */ (x) => use(x)`):
+  `_code_text` keeps the code after a `*/` that closes mid-line instead
+  of blanking the whole line (measured: svelte's `reg_exp_entity`).
+- `ghost-export` stays silent under generated/expected-output paths
+  (`_expected/`, `__snapshots__/`, `snapshots/`, `generated/`,
+  `codegen/`, `*.gen.*`): reachability of generated code is unknowable,
+  so neither is the claim that nobody can reach it (measured: 10 of 11
+  svelte findings were `tests/snapshot/samples/*/_expected/` output).
+- `stale-doc-ref` precision round on a real docs corpus: documentation
+  highlight markers (`+++`/`---`) are stripped before identifiers are
+  extracted, destructured fixture parameters (`async ({ page }) =>`) and
+  other in-example bindings count as known, ambient web-platform roots
+  (`customElements`, `getComputedStyle`, observers, workers) stay
+  silent, and doc-tooling directives (`// @noErrors`, `@errors`,
+  `/// file:`, `---cut---`) mark a block illustrative. svelte went from
+  12 lies to 0.
+- `stale-doc-ref` is no longer silently disabled on a tree with no
+  manifest anywhere: `declared_dependencies` returns `None` there and the
+  checker iterated it, raising inside a swallowed checker guard. Absence
+  of a manifest is now an empty declared set, not a dark checker.
 
 ### Added
-- Adversarial corpus (`adv-*`, 11 cases): planted agent-style rot that
+- Adversarial corpus (`adv-*`, 19 cases): planted agent-style rot that
   must fire (rename fallout, moved paths, stale CLI flags, real ghosts)
   alongside legitimate lookalikes that must stay silent (PEP 562 lazy
   attributes, namespace packages, star re-exports, guarded imports,
-  pytest doubles, docs prose, CJS interop). 29/29 cases green.
+  pytest doubles, docs prose, CJS interop, `+++`-annotated examples,
+  generated `_expected` output, inline-comment-guarded calls). 37/37
+  cases green.
 
 ### Fixed
 - `stale-doc-ref` JavaScript precision across two rounds: ambient roots
