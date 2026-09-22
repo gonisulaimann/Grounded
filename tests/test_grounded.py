@@ -8,6 +8,7 @@ Tests pin suppression rules, not just detections.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -2919,21 +2920,136 @@ class TestStaleCliRef(unittest.TestCase):
 
 
 class TestSkillSync(unittest.TestCase):
-    def test_packaged_skill_matches_registry_source(self):
-        repo = Path(__file__).resolve().parent.parent
-        for rel in ("agent-skill", "src/grounded/skill"):
-            self.assertTrue((repo / rel / "SKILL.md").exists(), rel)
-        left = sorted(p.relative_to(repo / "agent-skill")
-                      for p in (repo / "agent-skill").rglob("*") if p.is_file())
-        right = sorted(p.relative_to(repo / "src/grounded/skill")
-                       for p in (repo / "src/grounded/skill").rglob("*") if p.is_file())
-        self.assertEqual(left, right)
-        for rel in left:
+    """`agent-skill/` is generated from `src/grounded/skill/`, not maintained.
+
+    `src/grounded/skill/` is the source of truth (it is what
+    `init-agent --skill` installs and what `package-data` ships in the wheel);
+    the top-level directory exists so the skill stays browsable and
+    `cp -r`-able from the repository. A test that only compared the two trees
+    told a maintainer *that* they had drifted, never how to fix it, and left
+    every doc correction to be typed twice.
+    """
+
+    def _repo(self) -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    def _run(self, *args: str) -> "subprocess.CompletedProcess":
+        import subprocess
+        script = self._repo() / "scripts" / "sync-skill.py"
+        return subprocess.run([sys.executable, str(script), *args],
+                              capture_output=True, text=True)
+
+    def test_mirror_is_in_sync_with_its_source(self) -> None:
+        proc = self._run("--check")
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+
+    def test_drift_is_detected_then_repaired(self) -> None:
+        repo = self._repo()
+        source = repo / "src" / "grounded" / "skill"
+        with tempfile.TemporaryDirectory() as td:
+            mirror = Path(td) / "agent-skill"
+            # control: a missing mirror is drift, and says what is missing
+            empty = self._run("--check", "--source", str(source), "--mirror", str(mirror))
+            self.assertEqual(empty.returncode, 1)
+            self.assertIn("SKILL.md", empty.stderr)
+            # generating repairs it, and a re-check is clean
             self.assertEqual(
-                (repo / "agent-skill" / rel).read_bytes(),
-                (repo / "src/grounded/skill" / rel).read_bytes(), str(rel))
-        self.assertIn("name: grounded",
-                      (repo / "agent-skill" / "SKILL.md").read_text().splitlines()[1])
+                self._run("--source", str(source), "--mirror", str(mirror)).returncode, 0)
+            self.assertEqual(
+                self._run("--check", "--source", str(source), "--mirror", str(mirror)).returncode, 0)
+            # a file the source no longer has is drift too, and is pruned
+            stale = mirror / "references" / "gone.md"
+            stale.write_text("removed upstream\n", encoding="utf-8")
+            self.assertEqual(
+                self._run("--check", "--source", str(source), "--mirror", str(mirror)).returncode, 1)
+            self._run("--source", str(source), "--mirror", str(mirror))
+            self.assertFalse(stale.exists())
+
+    def test_skill_front_matter_and_examples_shipped(self) -> None:
+        repo = self._repo()
+        for rel in ("agent-skill", "src/grounded/skill"):
+            skill = repo / rel / "SKILL.md"
+            self.assertTrue(skill.exists(), rel)
+            self.assertIn("name: grounded", skill.read_text().splitlines()[1])
+        self.assertTrue((repo / "src/grounded/skill" / "examples").is_dir())
+
+
+class TestRecallHarness(unittest.TestCase):
+    """`bench/recall.py` measures recall inside real repos, so the planting
+    itself must never decide the outcome.
+
+    Two artifacts were measured on 2026-09-22 while building it, both of which
+    first reported as recall losses the checkers never caused:
+
+    * a case planted one directory deeper stopped firing, because three cases
+      depend on repo-root-relative semantics (`src/` layout, `@patch` module
+      roots, a top-level `pyproject.toml`);
+    * a fixture merged into a host whose Markdown ends inside an unclosed fence
+      landed *inside* that dangling block, so `stale-cli-ref` could not parse
+      the invocation as one. This repo's own `README.md` had exactly that
+      defect, so the phantom miss was not hypothetical.
+
+    A published recall number is only meaningful if the harness can show the
+    rot was planted in a well-formed context; the second case is pinned here.
+    """
+
+    def _recall(self):
+        import importlib.util
+        path = Path(__file__).resolve().parent.parent / "bench" / "recall.py"
+        spec = importlib.util.spec_from_file_location("bench_recall", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _host(self, readme: str):
+        td = tempfile.TemporaryDirectory()
+        host = Path(td.name) / "host"
+        host.mkdir()
+        (host / "README.md").write_text(readme, encoding="utf-8")
+        return td, host
+
+    def test_plant_survives_an_unclosed_host_fence(self) -> None:
+        recall = self._recall()
+        original = "# Host\n\n```console\ngrounded scan .\n"  # opened, never closed
+        td, host = self._host(original)
+        with td:
+            self.assertTrue(recall.ends_inside_fence(original))
+            report = recall.run_repo(host, recall.firing_cases(["cli-stale"]))
+            self.assertEqual([r["outcome"] for r in report["results"]], ["caught"],
+                             report["results"])
+            # the host's own defect is surfaced, never silently absorbed
+            self.assertEqual(report["unbalanced_hosts"], ["README.md"])
+            self.assertEqual(report["checker_errors"], [])
+            # and a measured repo is left exactly as it was found
+            self.assertEqual((host / "README.md").read_text(encoding="utf-8"),
+                             original)
+
+    def test_balanced_host_merges_without_closing_anything(self) -> None:
+        recall = self._recall()
+        td, host = self._host("# Host\n\n```console\ngrounded scan .\n```\n")
+        with td:
+            report = recall.run_repo(host, recall.firing_cases(["cli-stale"]))
+            self.assertEqual([r["outcome"] for r in report["results"]], ["caught"])
+            self.assertEqual(report["unbalanced_hosts"], [])
+
+
+class TestRepoDocFences(unittest.TestCase):
+    """The README's fences must balance.
+
+    Measured 2026-09-22: one unclosed fence in `README.md` inverted the state
+    of every fence after it, so 186 of the file's last 248 lines rendered as a
+    single code block on GitHub — the Rules table, Configuration, Limitations
+    and Contributing sections included. It also disarmed `stale-cli-ref` for
+    the whole tail of the file, since an invocation inside a code block is not
+    parsed as one. Neither symptom is visible in a diff review.
+    """
+
+    def test_readme_fences_are_balanced(self) -> None:
+        readme = Path(__file__).resolve().parent.parent / "README.md"
+        toggles = [ln for ln in readme.read_text(encoding="utf-8").splitlines()
+                   if re.match(r"^(`{3,}|~{3,})\s*([A-Za-z0-9_+-]*)\s*$", ln.strip())]
+        self.assertEqual(len(toggles) % 2, 0,
+                         f"README.md has {len(toggles)} fences: one is unclosed")
 
 
 class TestTomlCompat(unittest.TestCase):

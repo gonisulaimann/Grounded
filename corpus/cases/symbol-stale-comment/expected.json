@@ -1,0 +1,11 @@
+{
+  "enable": null,
+  "expect": [
+    {
+      "checker": "stale-symbol-ref",
+      "path": "mod.py",
+      "line": 2,
+      "contains": "zz_absent_symbol"
+    }
+  ]
+}

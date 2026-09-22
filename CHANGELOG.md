@@ -17,6 +17,16 @@ All notable changes to `grounded` are documented here. Format follows
   file, reported on stderr grouped by cause (one broken checker over a
   10k-file tree is one line, not 10k), and a scan that has any of them can no
   longer print the word `clean`.
+- **The README's fences did not balance, so 186 of its last 248 lines
+  rendered as one code block on GitHub** — the `stale-symbol-ref` table,
+  Configuration, Limitations and Contributing sections included. A
+  ` ```console ` block opened at line 216 was never closed, and in Markdown
+  an unterminated fence runs to EOF, so every fence after it inverted: 49
+  fences, odd. The rendering damage was the visible half; the silent half is
+  that `stale-cli-ref` stopped checking the whole tail of the file, since an
+  invocation inside a code block is not parsed as one. Now 50 fences,
+  balanced, with a test pinning the parity so the class cannot return
+  unnoticed.
 - Releases were shipping **three of four macOS/desktop binaries without
   saying so**. The `darwin-amd64` leg asked for `runs-on: macos-13`, an image
   GitHub retired, and a job pointed at a retired runner does not fail — it
@@ -50,6 +60,30 @@ All notable changes to `grounded` are documented here. Format follows
   its runner label when it fails, and opens a deduplicated issue for any
   trigger — including the release event, where a red run would otherwise be
   seen by no one.
+- `bench/recall.py`, a repo-scale **recall** harness. `corpus/run.py`
+  measures precision in isolation and is structurally unable to measure this:
+  it plants rot in the smallest tree that shows the behavior, so it says
+  nothing about whether the checker still fires with a real repository around
+  it — a definition two directories away, a manifest that declares the
+  package, a build directory that looks generated. The harness plants each
+  firing corpus case into a *copy* of a real repo, one case at a time and
+  root-relative, and requires the expected finding to reappear as a delta
+  against a baseline scan. Outcomes are three-way — caught, missed, and *not
+  planted* when a fixture may not overwrite a host file (excluded from the
+  number, never counted as a failure) — and a checker that raised refuses to
+  produce a recall number at all. Measured 2026-09-22 over Grounded, flask,
+  requests and svelte (3,922 files): 77 expectations, **0 misses, 0 checker
+  errors**.
+- Three corpus cases for the checkers that had no firing fixture at all
+  (`stale-symbol-ref`, `number-drift`, `fragile-anchor`), so all 12 checkers
+  are now held to a designed true positive instead of only to silence. The
+  corpus goes 37 → **40 cases**.
+- `scripts/sync-skill.py` — the agent skill is now generated, not
+  maintained: `src/grounded/skill/` is the source of truth (it is what
+  `init --agent` installs and what the wheel ships) and the top-level
+  `agent-skill/` is its mirror. A doc correction used to be typed twice and
+  verified by a test that only reported *that* the trees had drifted; now
+  `--check` reports the exact file and the test runs the real generator.
 - `--target-arch universal2` builds assert their precondition first: the
   macOS build refuses to start unless the interpreter is genuinely
   universal2 (setup-python's macOS packages are, verified from the published
@@ -59,6 +93,12 @@ All notable changes to `grounded` are documented here. Format follows
   of all under the amd64 name.
 
 ### Changed
+- `docs/rules.md` no longer treats isolation precision as repo recall, and no
+  longer cites a stale count: it claimed 14 corpus cases where there are 40,
+  and now records both measurements separately — 1.00 precision across 40
+  corpus cases, and 77 planted expectations with 0 misses at repo scale. The
+  README's development block listed `243 tests` and now states the measured
+  261, plus the recall command.
 - The graduation note for `stale-entrypoint` and `stale-mock-ref` no longer
   claims precision from silence alone. "Silent on 5 real repos" is not
   reproducible evidence and cannot distinguish a precise checker from a dead

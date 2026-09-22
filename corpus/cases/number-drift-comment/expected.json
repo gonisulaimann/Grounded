@@ -1,0 +1,11 @@
+{
+  "enable": null,
+  "expect": [
+    {
+      "checker": "number-drift",
+      "path": "mod.py",
+      "line": 1,
+      "contains": "5000"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "enable": null,
+  "expect": [
+    {
+      "checker": "fragile-anchor",
+      "path": "mod.py",
+      "line": 2,
+      "contains": "lines 42-45"
+    }
+  ]
+}
