@@ -38,3 +38,20 @@ Rules:
   load-bearing: a silence case passing vacuously (checker not running,
   file not collected) is a false green — check the findings count in
   the runner output, not just PASS.
+
+## What this corpus does not measure
+
+This is precision **in isolation**: the smallest tree that shows each
+behavior. It proves a checker fires and stays quiet where it should,
+and says nothing about whether it still fires with a real repository
+around it — a definition two directories away, a manifest that declares
+the package, a build directory that looks generated. Real context can
+only ever *silence* a finding, so it needs its own measurement:
+`python3 bench/recall.py <repo>` replays these cases inside copies of
+real repos (see `bench/README.md`). A case that fires here and stays
+quiet there is exactly what that harness reports as a miss.
+
+Both runners must also prove the checker **ran**. A checker that raises
+returns no findings, so it passes every silence case vacuously: scans
+exit `3` with a checker error rather than reporting clean, and
+`bench/recall.py` refuses to state a recall number when a checker raised.

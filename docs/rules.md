@@ -125,11 +125,21 @@ numbers (2026-09-21):
   single reference repo-wide), **0 false positives** after the aliased-
   import fix. Default scans are byte-identical (Markdown is collected
   only when `stale-doc-ref` runs).
-* New checkers ride the same track: 14 corpus cases hold every checker
-  at 1.00 precision / 1.00 recall (`corpus/run.py`, CI-enforced), and
-  `stale-entrypoint`, `stale-mock-ref`, and `phantom-package` are
-  silent on this repo's real code (the only finding is a planted
-  corpus fixture).
+* New checkers ride the same track: 40 corpus cases hold every checker
+  at 1.00 precision (`corpus/run.py`, CI-enforced — all 12 checkers
+  have a firing fixture), and `stale-entrypoint`, `stale-mock-ref`, and
+  `phantom-package` are silent on this repo's real code (the only
+  finding is a planted corpus fixture).
+* Isolation precision is not repo recall, and the two need separate
+  evidence: the corpus plants rot in the smallest tree that shows the
+  behavior, while `bench/recall.py` replays each firing case inside a
+  copy of a real repository, where definitions, manifests and
+  generated directories are the context that can silence it. Measured
+  2026-09-22 over Grounded, flask, requests and svelte (3,922 files):
+  **77 planted expectations, 0 misses, 0 checker errors**. 3 cases
+  were not plantable — a fixture may not overwrite a host's own
+  `pyproject.toml`, which would change what the host *is* — and are
+  excluded from the number rather than counted as failures.
 
 ## How a rule decides
 
