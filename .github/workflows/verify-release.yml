@@ -1,0 +1,213 @@
+name: Verify Release Assets
+
+# A job that never starts cannot fail. When the macOS Intel leg targeted the
+# retired `macos-13` runner it stayed queued for days, the build workflow
+# stayed green, and releases shipped without `grounded-darwin-amd64` — which
+# made `install.sh` 404 on Intel Macs (it derives the asset name from
+# `uname -m`). Nothing in the producing workflow can report that, so this
+# audit runs independently: on every publish, and daily so a gap that appears
+# later is still caught.
+#
+# It checks two things:
+#   1. every expected asset exists on the release;
+#   2. the macOS assets are genuinely fat Mach-O (arm64 + x86_64), not
+#      arm64-only bytes published under an amd64 name.
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to audit (default: latest)"
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  EXPECTED: grounded-linux-amd64 grounded-darwin-arm64 grounded-darwin-amd64 grounded-windows-amd64.exe
+  ISSUE_TITLE: "Release assets incomplete"
+  BIN_WORKFLOW: release-binaries.yml
+
+jobs:
+  verify:
+    name: Audit published assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Resolve the release tag
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Auditing ${TAG} at $(date -u +%H:%M:%SZ)"
+
+      - name: Wait for assets to appear
+        # The release event fires while the build matrix is still uploading.
+        # A stuck leg never uploads, so this bound is what turns "queued
+        # forever" into a failed audit.
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          TAG='${{ steps.rel.outputs.tag }}'
+          for attempt in $(seq 1 30); do
+            PRESENT="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort | tr '\n' ' ')"
+            MISSING=""
+            for want in $EXPECTED; do
+              case " $PRESENT " in *" $want "*) ;; *) MISSING="$MISSING $want" ;; esac
+            done
+            if [ -z "$MISSING" ]; then
+              echo "all assets present after ${attempt} check(s)"
+              exit 0
+            fi
+            echo "attempt ${attempt}/30 still missing:${MISSING}"
+            sleep 60
+          done
+          echo "::error::assets did not appear within 30 minutes; a build leg is stuck or was skipped"
+          exit 1
+
+      - name: Check expected assets exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          TAG='${{ steps.rel.outputs.tag }}'
+          PRESENT="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort | tr '\n' ' ')"
+          echo "release ${TAG} assets: ${PRESENT}"
+          rc=0
+          for want in $EXPECTED; do
+            case " $PRESENT " in
+              *" $want "*) echo "ok       $want" ;;
+              *) echo "::error::release ${TAG} is missing asset ${want}"; rc=1 ;;
+            esac
+          done
+          exit "$rc"
+
+      - name: Verify macOS assets are universal2 (fat Mach-O)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG='${{ steps.rel.outputs.tag }}'
+          mkdir -p /tmp/assets && cd /tmp/assets
+          for name in grounded-darwin-arm64 grounded-darwin-amd64; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name"
+          done
+          python3 - <<'PY'
+          import pathlib
+          import struct
+          import sys
+
+          ARCHES = {0x01000007: "x86_64", 0x0100000C: "arm64"}
+
+          def fat_arches(path: pathlib.Path):
+              """CPUs in a Mach-O file, or None when it is not a fat binary."""
+              head = path.read_bytes()[:4096]
+              magic = head[:4]
+              if magic in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                  endian, wide = ">", magic == b"\xca\xfe\xba\xbf"
+              elif magic in (b"\xbe\xba\xfe\xca", b"\xbf\xba\xfe\xca"):
+                  endian, wide = "<", magic == b"\xbf\xba\xfe\xca"
+              else:
+                  return None  # thin (single-arch) Mach-O
+              count = struct.unpack_from(endian + "I", head, 4)[0]
+              size = 32 if wide else 20
+              out = []
+              for i in range(count):
+                  cputype = struct.unpack_from(endian + "i", head, 8 + i * size)[0]
+                  out.append(ARCHES.get(cputype, hex(cputype)))
+              return out
+
+          failed = False
+          for name in ("grounded-darwin-arm64", "grounded-darwin-amd64"):
+              p = pathlib.Path(name)
+              if not p.exists():
+                  print(f"::error::{name} not downloadable")
+                  failed = True
+                  continue
+              arches = fat_arches(p)
+              size = p.stat().st_size / 1048576
+              if arches is None:
+                  print(f"::error::{name} is a thin (single-arch) binary, not universal2")
+                  failed = True
+                  continue
+              print(f"{name}: {size:.1f} MB, architectures: {', '.join(arches)}")
+              for want in ("arm64", "x86_64"):
+                  if want not in arches:
+                      print(f"::error::{name} lacks {want}")
+                      failed = True
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Diagnose which build leg is outstanding
+        # Runs only when a step above failed. The failure this workflow exists
+        # to catch is a leg that never starts, and a run cannot report on
+        # itself — so name the culprit here: every job of the producing run
+        # with its status, conclusion and the runner label it asked for. That
+        # is what turns "asset missing" into "asked for retired macos-13".
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          echo "recent runs of ${BIN_WORKFLOW}:"
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow "$BIN_WORKFLOW" \
+            --limit 5 --json databaseId,status,conclusion,createdAt,headBranch \
+            --jq '.[] | "  run \(.databaseId) \(.status)/\(.conclusion // "-") \(.createdAt) \(.headBranch)"' \
+            || echo "  (workflow list unavailable)"
+          RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$BIN_WORKFLOW" \
+            --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -n "${RUN_ID:-}" ]; then
+            echo
+            echo "legs of run ${RUN_ID}:"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/${RUN_ID}/jobs" \
+              --jq '.jobs[] | "  \(.name) | status=\(.status) conclusion=\(.conclusion // "-") started=\(.started_at // "never") labels=\((.labels // []) | join(","))"' \
+              || echo "  (jobs unavailable)"
+          fi
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "## Release asset audit"
+            echo ""
+            echo "- tag: \`${{ steps.rel.outputs.tag }}\`"
+            echo "- trigger: \`${{ github.event_name }}\`"
+            echo "- expected: \`$EXPECTED\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue when the audit fails
+        # Fires for every trigger, including the release event. A red run at
+        # publish time is precisely the "nobody is looking" case this audit
+        # exists to end, and on a solo-maintained repo an issue is the one
+        # surface that reliably gets seen. One open issue per title is kept,
+        # so repeats comment instead of spamming.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number')"
+          TAG='${{ steps.rel.outputs.tag }}'
+          BODY="$(printf 'The daily audit of `%s` failed.\n\nExpected assets:\n\n```\n%s\n```\n\nRun: %s/%s/actions/runs/%s' \
+            "$TAG" "$(printf '%s\n' $EXPECTED)" "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}")"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            echo "commented on issue #${EXISTING}"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$BODY"
+          fi

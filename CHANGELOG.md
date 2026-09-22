@@ -5,6 +5,38 @@ All notable changes to `grounded` are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- Releases were shipping **three of four macOS/desktop binaries without
+  saying so**. The `darwin-amd64` leg asked for `runs-on: macos-13`, an image
+  GitHub retired, and a job pointed at a retired runner does not fail — it
+  stays **queued forever**. The matrix therefore never went red, nothing
+  reported the gap, and because `install.sh` derives
+  `grounded-${OS}-${ARCH}` from `uname`, Intel Macs got a 404 from the
+  advertised one-liner and blamed the network. Measured 2026-09-22: three
+  runs stuck queued, the oldest over 20 hours. The two macOS legs are now a
+  single `macos-latest` leg that builds a **universal2** binary and
+  publishes it under both historical asset names, so no installer, README
+  link or user script changes. `timeout-minutes` does **not** cover queue
+  time, so the fix is removing the runner dependency rather than bounding
+  it.
+
+### Added
+- `verify-release.yml`, an independent audit of the published asset set
+  (every release, plus daily). A leg that never starts cannot report on
+  itself, so the audit runs outside the producing workflow: it waits up to
+  30 minutes for all four assets, checks the macOS assets are genuinely fat
+  Mach-O carrying both `arm64` and `x86_64`, names the outstanding leg and
+  its runner label when it fails, and opens a deduplicated issue for any
+  trigger — including the release event, where a red run would otherwise be
+  seen by no one.
+- `--target-arch universal2` builds assert their precondition first: the
+  macOS build refuses to start unless the interpreter is genuinely
+  universal2 (setup-python's macOS packages are, verified from the published
+  packages' own Mach-O headers — `bin/python3.11` and
+  `libpython3.11.dylib` both report `x86_64 arm64`), then gates the output
+  with `lipo -archs`. A thin binary can therefore never be published, least
+  of all under the amd64 name.
+
 ## [0.16.0] - 2026-09-22
 
 ### Fixed

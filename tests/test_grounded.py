@@ -1252,6 +1252,81 @@ class TestRepoFiles(unittest.TestCase):
         self.assertIn("grounded scan", hooks)
 
 
+class TestReleaseBinaries(unittest.TestCase):
+    """The standalone-binary release is a three-way contract: `install.sh`
+    derives `grounded-${OS}-${ARCH}` from `uname`, `release-binaries.yml`
+    publishes exactly those names, and `verify-release.yml` audits them. On
+    2026-09-22 three releases shipped three of four assets because the
+    darwin-amd64 leg asked for the retired `macos-13` image and stayed queued
+    forever instead of failing; with a missing Intel asset, the advertised
+    one-liner 404'd on Intel Macs and blamed the network. These pin the
+    invariants that let that gap stay invisible."""
+
+    def _root(self) -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    def _workflow(self, name: str) -> str:
+        return (self._root() / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+    def _assets(self, text: str) -> set[str]:
+        import re
+        return set(
+            re.findall(r"grounded-(?:darwin|linux|windows)-(?:arm64|amd64)(?:\.exe)?", text)
+        )
+
+    def test_producer_and_auditor_agree_on_the_asset_set(self) -> None:
+        produced = self._assets(self._workflow("release-binaries.yml"))
+        audited = self._assets(self._workflow("verify-release.yml"))
+        self.assertEqual(produced, audited)
+        self.assertEqual(
+            produced,
+            {
+                "grounded-linux-amd64",
+                "grounded-windows-amd64.exe",
+                "grounded-darwin-arm64",
+                "grounded-darwin-amd64",
+            },
+        )
+
+    def test_no_dated_macos_runner_in_the_binary_matrix(self) -> None:
+        # A job pointed at a retired image does not fail — it stays queued
+        # forever, so the workflow never goes red. Every dated macOS image is
+        # retired eventually, so the matrix must use the rolling label.
+        import re
+        text = self._workflow("release-binaries.yml")
+        dated = re.findall(r"(?:runs-on:\s*|os:\s*)(macos-\d+)\b", text)
+        self.assertEqual(dated, [], f"dated macOS runner images queue forever: {dated}")
+        self.assertIn("macos-latest", text)
+
+    def test_macos_binary_is_universal2_gated(self) -> None:
+        # One fat binary serves both darwin names; the gate is what stops an
+        # arm64-only build from ever being published under the amd64 name.
+        text = self._workflow("release-binaries.yml")
+        self.assertIn("--target-arch universal2", text)
+        self.assertIn("ARCH_FLAG", text)
+        self.assertIn("lipo -archs", text)
+
+    def test_a_stuck_leg_is_audited_outside_the_producing_workflow(self) -> None:
+        # A queued job cannot report on itself, so the audit runs in a separate
+        # workflow, on a schedule as well as on the release event, and reaches
+        # an issue rather than a red run nobody reads.
+        text = self._workflow("verify-release.yml")
+        self.assertIn("release:", text)
+        self.assertIn("schedule:", text)
+        self.assertIn("failure()", text)
+
+    def test_installer_never_advertises_an_unpublished_platform(self) -> None:
+        import re
+        sh = (self._root() / "install.sh").read_text(encoding="utf-8")
+        arches = set(re.findall(r'ARCH="([a-z0-9_]+)"', sh))
+        self.assertEqual(arches, {"amd64", "arm64"}, arches)
+        produced = self._assets(self._workflow("release-binaries.yml"))
+        for arch in arches:  # both macOS architectures must resolve
+            self.assertIn(f"grounded-darwin-{arch}", produced)
+        for osname, arch in re.findall(r"\b(linux|darwin)/(amd64|arm64)\b", sh):
+            self.assertIn(f"grounded-{osname}-{arch}", produced)
+
+
 class TestFix(unittest.TestCase):
     def _write(self, root: Path, files: dict[str, str]) -> None:
         for rel, text in files.items():

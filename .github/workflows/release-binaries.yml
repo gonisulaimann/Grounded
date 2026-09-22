@@ -8,10 +8,32 @@ on:
 permissions:
   contents: write
 
+# ---------------------------------------------------------------------------
+# One macOS binary, both architectures.
+#
+# This matrix used to have two macOS legs: macos-latest (darwin-arm64) and
+# macos-13 (darwin-amd64). GitHub retired the Intel `macos-13` image, and a
+# job targeting a retired runner does not fail — it stays **queued forever**.
+# Because it never failed, the workflow never went red and releases shipped
+# three of four assets while `install.sh` (which derives
+# `grounded-${OS}-${ARCH}` from `uname`) 404'd on Intel Macs and blamed the
+# network. Measured 2026-09-22: three runs stuck queued, oldest 20 hours.
+#
+# Fix: build ONE universal2 (fat) binary on an available runner and publish
+# it under both historical asset names, so every existing installer, README
+# link and user script keeps working. `lipo -archs` is a hard gate: if the
+# binary is not fat, the job fails loudly instead of shipping arm64-only
+# under an amd64 name.
+#
+# A queued-forever job still cannot report on itself, so
+# .github/workflows/verify-release.yml audits the published asset set
+# independently (release event + daily) and fails when something is missing.
+# ---------------------------------------------------------------------------
 jobs:
   build-binaries:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -20,18 +42,20 @@ jobs:
             target: linux-amd64
             binary_name: grounded-linux-amd64
             sep: ":"
+            assets: dist/grounded-linux-amd64
           - os: macos-latest
-            target: darwin-arm64
+            target: darwin-universal2
             binary_name: grounded-darwin-arm64
             sep: ":"
-          - os: macos-13
-            target: darwin-amd64
-            binary_name: grounded-darwin-amd64
-            sep: ":"
+            # Same fat binary under both names: install.sh picks by `uname -m`.
+            assets: |
+              dist/grounded-darwin-arm64
+              dist/grounded-darwin-amd64
           - os: windows-latest
             target: windows-amd64
             binary_name: grounded-windows-amd64.exe
             sep: ";"
+            assets: dist/grounded-windows-amd64.exe
 
     steps:
       - name: Checkout code
@@ -46,10 +70,59 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller
 
+      - name: Preflight - the interpreter must carry both architectures
+        if: matrix.target == 'darwin-universal2'
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import sysconfig
+
+          # `--target-arch universal2` merges the slices of the *Python being
+          # used*, so a thin interpreter can never yield a fat binary. The
+          # error PyInstaller raises for that mismatch is opaque, so fail here
+          # with the cause and the fix instead. Measured 2026-09-22: the
+          # python.org packages setup-python installs for >= 3.11 are genuine
+          # universal2 (bin/python3.11 and libpython3.11.dylib both report
+          # x86_64 arm64), which is the precondition this asserts.
+          tag = sysconfig.get_platform()
+          print(f"interpreter platform tag: {tag}")
+          if not tag.endswith("universal2"):
+              raise SystemExit(
+                  "::error::universal2 build needs a universal2 Python, but "
+                  f"setup-python delivered '{tag}'. Pin python-version to >= "
+                  "3.11 (the python.org universal2 builds)."
+              )
+
+          libdir = sysconfig.get_config_var("LIBDIR")
+          libname = sysconfig.get_config_var("LDLIBRARY")
+          dylib = os.path.join(libdir or "", libname or "")
+          if libdir and libname and os.path.exists(dylib):
+              archs = subprocess.run(
+                  ["lipo", "-archs", dylib], capture_output=True, text=True
+              ).stdout.split()
+              print(f"{libname}: {' '.join(archs)}")
+              missing = [a for a in ("x86_64", "arm64") if a not in archs]
+              if missing:
+                  raise SystemExit(
+                      f"::error::{dylib} lacks {', '.join(missing)}; a "
+                      "universal2 build is impossible with this interpreter"
+                  )
+          else:
+              print("libpython is not an on-disk file; platform tag check only")
+          print("preflight ok: both architectures are available")
+          PY
+
       - name: Build standalone binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          pyinstaller --onefile \
+          set -eu
+          ARCH_FLAG=""
+          if [ "${{ matrix.target }}" = "darwin-universal2" ]; then
+            ARCH_FLAG="--target-arch universal2"
+          fi
+          pyinstaller --onefile $ARCH_FLAG \
             --name ${{ matrix.binary_name }} \
             --paths src \
             --add-data "src/grounded/skill${{ matrix.sep }}grounded/skill" \
@@ -58,6 +131,24 @@ jobs:
           chmod +x dist/${{ matrix.binary_name }}
           ./dist/${{ matrix.binary_name }} --version
           ./dist/${{ matrix.binary_name }} scan src
+
+      - name: Verify universal2 (both architectures present)
+        # The gate that makes the old silent failure impossible: a thin binary
+        # can never be published, least of all under the amd64 name.
+        if: matrix.target == 'darwin-universal2'
+        run: |
+          set -eu
+          ARCHS="$(lipo -archs dist/${{ matrix.binary_name }})"
+          echo "lipo -archs: ${ARCHS}"
+          for want in arm64 x86_64; do
+            case " ${ARCHS} " in
+              *" ${want} "*) ;;
+              *) echo "::error::macOS binary is missing ${want} (lipo -archs: ${ARCHS})"; exit 1 ;;
+            esac
+          done
+          # Publish the same fat binary under the historical per-arch name too.
+          cp "dist/${{ matrix.binary_name }}" dist/grounded-darwin-amd64
+          lipo -archs dist/grounded-darwin-amd64
 
       - name: Build standalone binary (Windows)
         if: runner.os == 'Windows'
@@ -72,17 +163,19 @@ jobs:
           & .\dist\${{ matrix.binary_name }} --version
           & .\dist\${{ matrix.binary_name }} scan src
 
-      - name: Upload binary to GitHub Release
+      - name: Upload binaries to GitHub Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.binary_name }}
+          files: ${{ matrix.assets }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifact (workflow_dispatch)
+      - name: Upload artifacts (workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary_name }}
-          path: dist/${{ matrix.binary_name }}
+          name: ${{ matrix.target }}
+          path: ${{ matrix.assets }}
+          if-no-files-found: error
+          retention-days: 14

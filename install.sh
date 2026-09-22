@@ -82,11 +82,24 @@ INSTALL_DIR="${HOME}/.local/bin"
 mkdir -p "$INSTALL_DIR"
 DEST="${INSTALL_DIR}/${BIN_NAME}"
 
+# A 404 here is usually a missing asset, not a network fault: this path runs
+# only after Homebrew and pip/uvx were both skipped, and the release publishes
+# a fixed platform set. Naming the platform stops "check your network
+# connection" from being the only clue — Intel Macs got exactly that for three
+# releases while their asset was simply absent (2026-09-22).
+download_failed() {
+    # Guidance first: error() exits, so anything after it is dead code.
+    printf '  Grounded publishes standalone binaries for linux/amd64, darwin/arm64 and darwin/amd64.\n' >&2
+    printf '  This machine is %s/%s.\n' "$OS_NAME" "$ARCH" >&2
+    printf '  Install Python 3.10 or later and re-run this script to use the pip/uvx path.\n' >&2
+    error "no standalone binary at ${URL}"
+}
+
 info "Downloading ${TARGET_NAME} to ${DEST}..."
 if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$URL" -o "$DEST" || error "Failed to download from $URL. Check your network connection."
+    curl -fsSL "$URL" -o "$DEST" || download_failed
 elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$DEST" "$URL" || error "Failed to download from $URL. Check your network connection."
+    wget -qO "$DEST" "$URL" || download_failed
 else
     error "Neither curl nor wget is installed."
 fi
