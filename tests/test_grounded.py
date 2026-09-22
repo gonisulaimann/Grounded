@@ -3072,5 +3072,74 @@ class TestDocRefPrecision(unittest.TestCase):
             self.assertTrue([f for f in out if f.checker == "stale-doc-ref"])
 
 
+class TestFileRefIgnoresBuildOutputs(unittest.TestCase):
+    def test_build_output_paths_are_silent(self):
+        """`dist/`, `build/`, `coverage/` are never indexed, so a comment
+        naming a path there cannot be judged missing (measured: the
+        dominant `stale-file-ref` shape on a real monorepo)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "cli.js").write_text(
+                "// Writes the bundle to `dist/index.cjs` for the loader.\n",
+                encoding="utf-8")
+            findings, _, _ = scan_root(root, Config())
+            self.assertEqual([f for f in findings if f.checker == "stale-file-ref"], [])
+
+    def test_elided_paths_are_placeholders(self):
+        """`src/.../File.tsx` is shorthand, not a claim: the `...` is the
+        placeholder. The segment split turned it into empty strings, so the
+        placeholder list never matched it."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "a.ts").write_text(
+                "// See `src/.../EndpointPageClient.tsx` for the flow.\n",
+                encoding="utf-8")
+            findings, _, _ = scan_root(root, Config())
+            self.assertEqual([f for f in findings if f.checker == "stale-file-ref"], [])
+
+    def test_missing_authored_path_still_reports(self):
+        # Control: the guards must not disarm ordinary path claims.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "src").mkdir()
+            (root / "src" / "app.py").write_text(
+                'def f():\n    """See `src/gone.py` for the old flow."""\n',
+                encoding="utf-8")
+            findings, _, _ = scan_root(root, Config())
+            self.assertTrue([f for f in findings if f.checker == "stale-file-ref"])
+
+
+class TestBaselineIntegrity(unittest.TestCase):
+    def test_baseline_is_deduplicated_and_total_matches_file(self):
+        """Two findings on different lines can share a fingerprint (it
+        hashes rule, path, title and claim — never line numbers). Writing
+        the raw list made the file longer than the reported total
+        (measured: 284 entries for 277 unique fingerprints on a 10k-file
+        tree)."""
+        from grounded.delta import write_baseline
+        from grounded.models import Finding
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / ".grounded-baseline.json"
+            same = dict(path="a.py", line=1, end_line=1, checker="stale-symbol-ref",
+                        severity="lie", title="t", claim="`ghost()`")
+            findings = [Finding(**same), Finding(**{**same, "line": 9})]
+            stats = write_baseline(path, findings)
+            written = json.loads(path.read_text(encoding="utf-8"))["fingerprints"]
+            self.assertEqual(len(written), len(set(written)))
+            self.assertEqual(len(written), stats["total"])
+            self.assertEqual(stats["total"], 1)
+
+    def test_baseline_round_trips_as_a_set(self):
+        from grounded.delta import load_baseline, write_baseline
+        from grounded.models import Finding
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "b.json"
+            f = Finding(path="a.py", line=3, end_line=3, checker="stale-file-ref",
+                        severity="lie", title="t", claim="src/gone.py")
+            write_baseline(path, [f])
+            self.assertEqual(len(load_baseline(path)), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

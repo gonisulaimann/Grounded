@@ -35,6 +35,20 @@ All notable changes to `grounded` are documented here. Format follows
   silent, and doc-tooling directives (`// @noErrors`, `@errors`,
   `/// file:`, `---cut---`) mark a block illustrative. svelte went from
   12 lies to 0.
+- `stale-file-ref` no longer reports a path under a directory the scan
+  deliberately ignores (build outputs, vendor trees, coverage): those
+  files are never indexed, so their existence cannot be judged. Removed
+  20 findings on a real monorepo, all generated or written at runtime
+  (`dist/docs/openapi.yaml` in CLI help text, `dist/index.cjs` in a
+  setup command).
+- `stale-file-ref` no longer reports elided paths (`src/.../File.tsx`).
+  The placeholder list already intended to silence these, but the
+  segment split turned `...` into empty strings and never matched.
+- `grounded baseline` de-duplicates its fingerprints before writing. Two
+  findings can share a fingerprint (it hashes rule, path, title and
+  claim, never line numbers), so the file held repeats and disagreed
+  with the `total` the command printed (measured: 284 entries for 277
+  unique fingerprints).
 - `stale-doc-ref` is no longer silently disabled on a tree with no
   manifest anywhere: `declared_dependencies` returns `None` there and the
   checker iterated it, raising inside a swallowed checker guard. Absence

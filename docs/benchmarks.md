@@ -167,12 +167,44 @@ positives with zero recall loss.
 * **Doc-tooling directives.** `// @noErrors`, `@errors`, `/// file:` and
   `---cut---` mark a block as not-executed and are treated like other
   illustrative markers.
+* **Build-output paths in file references.** `stale-file-ref` now shares
+  the import arms' verdict: a path under a scan-ignored directory is not
+  indexed, so it cannot be judged missing (20 findings removed on the
+  OmniRoute tree, all generated or written at runtime —
+  `dist/docs/openapi.yaml` in CLI help text, `dist/index.cjs` in a setup
+  command).
+* **Elided paths.** `src/.../File.tsx` is shorthand, not a claim. The
+  placeholder list intended this, but the segment split turned `...` into
+  empty segments and never matched (5 more findings removed on the same
+  tree).
+* **Baseline de-duplication.** `grounded baseline` stored duplicate
+  fingerprints and its printed `total` disagreed with the file (277
+  unique vs 284 entries on the same tree).
 * **A silently disabled checker.** `declared_dependencies` returns
   `None` when no manifest exists anywhere above the file, and
   `stale-doc-ref` iterated it unconditionally. The exception was
   swallowed by the scanner's checker guard, so the whole checker was
   dark on every manifest-less tree. Absence of a manifest is now an
   empty declared set.
+
+### OmniRoute, whole repository (with a starter `grounded.toml`)
+
+Ignoring the private `_tasks` tree and the local `.freebuff` scratch dir:
+
+| Checker | Before the round | After |
+| --- | ---: | ---: |
+| `stale-file-ref` | 103 | 78 |
+| `fragile-anchor` | 82 | 82 |
+| `stale-symbol-ref` | 55 | 55 |
+| `number-drift` | 23 | 23 |
+| `stale-import` | 2 | 2 |
+| **Total** | **265** | **240** |
+
+11,481 files in ~26 s; 235 unique fingerprints recorded as the adoption
+baseline. Again suppression-only: only `stale-file-ref` moves, so nothing
+else lost recall. `--changed` against the working tree reported 41
+findings (untracked files are fully reported by design) with 199 hidden
+outside changed lines.
 
 ### Residuals (measured, deliberately not fixed here)
 

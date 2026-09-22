@@ -44,13 +44,20 @@ def fingerprint(f: Finding) -> str:
 
 
 def write_baseline(path: Path, findings: list[Finding]) -> dict[str, int]:
-    """Write sorted fingerprint entries. Returns {"added","removed","total"}
-    relative to the existing file (0/0 when creating)."""
+    """Write sorted, de-duplicated fingerprint entries. Returns
+    {"added","removed","total"} relative to the existing file (0/0 when
+    creating).
+
+    Two findings can share a fingerprint (same rule, path, title and claim
+    text on different lines), so the entries are de-duplicated before
+    writing: otherwise the file grows with repeats and its length
+    disagrees with the `total` the caller just printed (measured on a
+    10k-file tree: 277 unique fingerprints, 284 findings, file of 284).
+    """
     old = load_baseline(path) if path.exists() else set()
-    new = sorted(fingerprint(f) for f in findings)
-    payload = {"version": BASELINE_VERSION, "fingerprints": new}
+    newset = {fingerprint(f) for f in findings}
+    payload = {"version": BASELINE_VERSION, "fingerprints": sorted(newset)}
     path.write_text(json.dumps(payload, indent=1) + "\n", encoding="utf-8")
-    newset = set(new)
     return {"added": len(newset - old), "removed": len(old - newset), "total": len(newset)}
 
 

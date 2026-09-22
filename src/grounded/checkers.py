@@ -1134,9 +1134,24 @@ def check_stale_file(facts: FileFacts, index: RepoIndex) -> list[Finding]:
             segs = [s.lower() for s in re.split(r"[/.]", ref)]
             if any(h in segs for h in PLACEHOLDER_PATH_HINTS):
                 continue
+            # Elided paths (`src/.../EndpointPageClient.tsx`) are shorthand the
+            # author chose instead of a full path: the `...` IS the
+            # placeholder. The segment split above cannot see it ("..."
+            # becomes empty segments), so test the raw ref.
+            if "..." in ref or "…" in ref:
+                continue
             if "://" in ref:
                 continue
             if not _in_repo_scope(ref, index):
+                continue
+            # A path under a directory the scan deliberately ignores (build
+            # outputs, vendor trees, coverage) is never indexed, so its
+            # existence cannot be judged — the same verdict the import arms
+            # already give. These are typically generated or written at
+            # runtime, not authored (measured on OmniRoute: `dist/docs/
+            # openapi.yaml` named in a CLI's help text and `dist/index.cjs`
+            # in a setup command were the dominant `stale-file-ref` shape).
+            if _base_in_ignored_dir(ref):
                 continue
             # v2: illustrative examples invent paths ("For example ...
             # ``django/templatetags/news/photos.py``"); a file ref
