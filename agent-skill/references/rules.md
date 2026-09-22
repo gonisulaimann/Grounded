@@ -19,7 +19,8 @@ Condensed checker semantics for agents. Full prose lives in the
 | `stale-cli-ref` | lie, opt-in only | documented `grounded` call with unknown subcommand/flag | prose mentions, synopsis meta-syntax, program output |
 
 Exit codes: `0` clean, `1` a finding at or above `--fail-on` (default
-`lie`), `2` usage or environment error.
+`lie`), `2` usage or environment error, `3` an enabled checker raised
+(scan incomplete — never reported as clean).
 
 Suppress one accepted finding where it sits:
 

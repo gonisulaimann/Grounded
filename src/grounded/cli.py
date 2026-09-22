@@ -18,7 +18,7 @@ from .delta import (
     split_baselined,
     write_baseline,
 )
-from .models import SEVERITY_RANK
+from .models import SEVERITY_RANK, CheckerError
 from .reporters import format_terminal, to_html, to_json, to_sarif
 from .scanner import apply_suppressions, collect_files, scan_root, warn_unknown_suppressions
 
@@ -115,6 +115,26 @@ def _resolve_enable_disable(config: Config, enable: str | None, disable: str | N
     return config
 
 
+def _report_checker_errors(errors: list[CheckerError]) -> None:
+    """Report checkers that raised, grouped by cause.
+
+    stderr keeps the stdout payload (JSON/SARIF/HTML) byte-identical, the way
+    unknown-suppression warnings already behave. Grouping matters: one broken
+    checker on 10k files is one mistake, not 10k lines of noise.
+    """
+    if not errors:
+        return
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for e in errors:
+        grouped.setdefault((e.checker, e.message), []).append(e.path)
+    for (checker_id, message), paths in sorted(grouped.items()):
+        where = paths[0] if len(paths) == 1 else f"{paths[0]} (+{len(paths) - 1} more)"
+        print(f"grounded: checker error: {checker_id} raised {message} at {where}",
+              file=sys.stderr)
+    print(f"grounded: {len(errors)} checker error(s): this scan is incomplete, not clean. "
+          f"Fix the checker, or disable it explicitly with --disable <id>.", file=sys.stderr)
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     given = Path(args.path)
     root = given.resolve()
@@ -138,9 +158,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
     cache_path = Path(args.cache) if args.cache else None
     if cache_path is not None and not cache_path.is_absolute():
         cache_path = root / cache_path
-    findings, facts, index = scan_root(root, config, jobs=args.jobs, cache_path=cache_path)
+    checker_errors: list[CheckerError] = []
+    findings, facts, index = scan_root(root, config, jobs=args.jobs, cache_path=cache_path,
+                                       checker_errors=checker_errors)
     n_files = len(facts)
     n_unparsed = len(index.parse_failed)
+    _report_checker_errors(checker_errors)
     for wpath, wline, wids in warn_unknown_suppressions(facts):
         print(f"grounded: warning: unknown checker id(s) in suppression at "
               f"{wpath}:{wline}: {', '.join(wids)} (known: {', '.join(sorted(CHECKERS))})",
@@ -189,10 +212,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
             for f in findings:
                 counts[f.severity] += 1
             note = f", {n_unparsed} file(s) unparsed" if n_unparsed else ""
-            out = f"grounded: {len(findings)} finding(s), {counts['lie']} lie(s), {counts['drift']} drift(s), {counts['smell']} smell(s) in {n_files} file(s){note}."
+            errs = f", {len(checker_errors)} checker error(s)" if checker_errors else ""
+            out = (f"grounded: {len(findings)} finding(s), {counts['lie']} lie(s), "
+                   f"{counts['drift']} drift(s), {counts['smell']} smell(s) in {n_files} file(s)"
+                   f"{note}{errs}.")
         else:
             out = format_terminal(findings, n_files, root=str(root), use_color=use_color,
-                                  n_unparsed=n_unparsed)
+                                  n_unparsed=n_unparsed,
+                                  n_checker_errors=len(checker_errors))
     if suppressed_note and fmt in ("terminal",):
         out += f"\ngrounded:{suppressed_note}."
     if args.output:
@@ -202,6 +229,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
     # exit code
     if config.fail_on == "never":
         return 0
+    if checker_errors:
+        # Distinct from 1 on purpose: a finding is a verdict about the repo;
+        # a checker error means there is no verdict at all, so a pipeline can
+        # tell "this repo has problems" from "this scan is not trustworthy".
+        return 3
     threshold = SEVERITY_RANK.get(config.fail_on, 3)
     for f in findings:
         if SEVERITY_RANK.get(f.severity, 0) >= threshold:
@@ -218,7 +250,15 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         root = root.parent
     config = Config.load(root, explicit=args.config)
     _resolve_enable_disable(config, args.enable, args.disable)
-    findings, facts, index = scan_root(root, config)
+    checker_errors: list[CheckerError] = []
+    findings, facts, index = scan_root(root, config, checker_errors=checker_errors)
+    if checker_errors:
+        # A baseline is a persisted scan result: writing one from an
+        # incomplete scan bakes permanent blind spots into every later gate.
+        _report_checker_errors(checker_errors)
+        print("grounded: refusing to write a baseline from an incomplete scan.",
+              file=sys.stderr)
+        return 3
     findings, _ = apply_suppressions(findings, {f.path: f for f in facts})
     target = Path(args.output) if args.output else (root / DEFAULT_BASELINE_NAME)
     stats = write_baseline(target, findings)

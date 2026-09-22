@@ -32,6 +32,23 @@ class Finding:
 
 
 @dataclass
+class CheckerError:
+    """A checker that raised instead of returning findings for one file.
+
+    A crash yields no findings, which is indistinguishable from a clean tree
+    in every summary line. Recording it is what lets a scan refuse to report
+    `clean` without every enabled checker having actually run.
+    """
+
+    checker: str
+    path: str
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class FileFacts:
     path: str  # relative posix path
     language: str  # "python" | "javascript"

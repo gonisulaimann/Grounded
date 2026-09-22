@@ -2643,15 +2643,17 @@ CHECKER_DESCRIPTIONS = {
     "stale-doc-ref": "EXPERIMENTAL, opt-in only: fenced Markdown code example calls a symbol defined nowhere in the repo.",
     "stale-contract-ref": "EXPERIMENTAL, opt-in only: deprecation target, lock-holder claim, or env default in a comment that contradicts the repo.",
     "ghost-export": "EXPERIMENTAL, opt-in only: public symbol with no importers, no in-file use, and no deliberate API marking.",
-    "stale-entrypoint": "pyproject scripts and package.json bin/main pointing at nothing in the repo (graduated 2026-09-22: silent on 5 real repos).",
-    "stale-mock-ref": "@patch/patch.object strings naming symbols absent from the in-repo module (graduated 2026-09-22: zero false positives on django/CPython stress).",
+    "stale-entrypoint": "pyproject scripts and package.json bin/main pointing at nothing in the repo (graduated 2026-09-22; re-verified with the checker-error count at 0 — 0 false positives over 15,196 files in svelte/OmniRoute/flask/requests, so the checker demonstrably ran).",
+    "stale-mock-ref": "@patch/patch.object strings naming symbols absent from the in-repo module (graduated 2026-09-22; re-verified with the checker-error count at 0 — 0 false positives over 15,196 files in svelte/OmniRoute/flask/requests, so the checker demonstrably ran).",
     "phantom-package": "EXPERIMENTAL, opt-in only: imports declared in no manifest (pyproject, requirements, package.json).",
     "stale-cli-ref": "EXPERIMENTAL, opt-in only: documented `grounded` invocations with unknown subcommands or flags.",
 }
 
 # Opt-in checkers are registered (so --enable/explain work) but excluded
 # from every default set. A checker graduates by measured precision, not
-# by age: see docs/rules.md.
+# by age: see docs/rules.md. Silence only counts as evidence when the scan
+# can prove the checker ran — a checker that raises also returns no findings
+# — so graduation requires a checker-error count of 0 (exit code 3).
 OPT_IN_CHECKERS = frozenset({"stale-doc-ref", "stale-contract-ref", "ghost-export",
                              "phantom-package", "stale-cli-ref"})
 DEFAULT_ENABLED = frozenset(CHECKERS) - OPT_IN_CHECKERS

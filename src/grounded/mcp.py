@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import __version__
 from .checkers import CHECKER_DESCRIPTIONS, CHECKERS, REMOVED_CHECKERS
+from .models import CheckerError
 
 SUPPORTED_VERSIONS = ("2025-03-26", "2025-06-18", "2024-11-05")
 SERVER_NAME = "grounded"
@@ -160,17 +161,25 @@ class McpServer:
         fail_on = str(args.get("fail_on", "lie"))
         if fail_on not in ("lie", "drift", "smell", "never"):
             return _error(req_id, -32602, f"bad fail_on: {fail_on}")
-        findings, facts, _index = scan_root(root, Config.load(root))
+        checker_errors: list[CheckerError] = []
+        findings, facts, _index = scan_root(root, Config.load(root),
+                                           checker_errors=checker_errors)
         facts_by_path = {f.path: f for f in facts}
         findings, n_suppressed = apply_suppressions(findings, facts_by_path)
         from .models import SEVERITY_RANK
         threshold = SEVERITY_RANK.get(fail_on, 3)
         failed = [f for f in findings if SEVERITY_RANK.get(f.severity, 0) >= threshold]
+        # An agent acting on `failed: false` must not be reading the result of
+        # a checker that died: report the failures explicitly and let them
+        # force a failure, so "no findings" is never mistaken for "verified".
+        incomplete = bool(checker_errors) and fail_on != "never"
         return _ok(req_id, {
             "content": [{
                 "type": "text",
                 "text": json.dumps({
-                    "failed": bool(failed),
+                    "failed": bool(failed) or incomplete,
+                    "incomplete": bool(checker_errors),
+                    "checker_errors": [e.to_dict() for e in checker_errors],
                     "summary": {
                         "files": len(facts),
                         "findings": len(findings),
@@ -178,6 +187,7 @@ class McpServer:
                         "drift": sum(1 for f in findings if f.severity == "drift"),
                         "smell": sum(1 for f in findings if f.severity == "smell"),
                         "suppressed": n_suppressed,
+                        "checker_errors": len(checker_errors),
                     },
                     "findings": [dict(f.to_dict(), fix_hint=f.fix) for f in findings],
                 }),

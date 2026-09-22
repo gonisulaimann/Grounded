@@ -1327,6 +1327,147 @@ class TestReleaseBinaries(unittest.TestCase):
             self.assertIn(f"grounded-{osname}-{arch}", produced)
 
 
+class TestCheckerErrors(unittest.TestCase):
+    """A checker that raises must be a counted, failing event.
+
+    `except Exception: continue` made a crash indistinguishable from a checker
+    that found nothing: a scan whose checker died printed
+    `grounded: clean, N file(s) scanned, 0 findings` and exited 0. Every gate
+    built on that output could therefore only get *greener* from a bug, which
+    is how `stale-doc-ref` stayed silently dark on any tree without a manifest
+    (its `declared_dependencies()` returned None) while the dogfood gate read
+    `clean`.
+    """
+
+    def setUp(self) -> None:
+        from grounded.checkers import CHECKERS
+        self._saved = dict(CHECKERS)
+        self._checkers = CHECKERS
+
+    def tearDown(self) -> None:
+        self._checkers.clear()
+        self._checkers.update(self._saved)
+
+    def _break(self, checker_id: str) -> None:
+        def boom(*_a, **_k):
+            raise RuntimeError("checker exploded")
+        self._checkers[checker_id] = boom
+
+    def _tree_with_a_finding(self, td: str) -> Path:
+        root = Path(td)
+        (root / "mod.py").write_text(
+            "def helper():\n    # Call ghost_service() to sync state.\n    return 1\n",
+            encoding="utf-8")
+        return root
+
+    def _clean_tree(self, td: str) -> Path:
+        root = Path(td)
+        (root / "mod.py").write_text(
+            "def helper():\n    # Returns the cached value.\n    return 1\n",
+            encoding="utf-8")
+        return root
+
+    def test_crash_is_recorded_with_its_checker_and_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = self._tree_with_a_finding(td)
+            self._break("stale-symbol-ref")
+            errors: list = []
+            _, _, _ = scan_root(root, Config(), checker_errors=errors)
+            self.assertEqual([(e.checker, e.path) for e in errors],
+                             [("stale-symbol-ref", "mod.py")])
+            self.assertIn("checker exploded", errors[0].message)
+
+    def test_a_broken_checker_never_hides_a_healthy_ones_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = self._tree_with_a_finding(td)
+            self._break("number-drift")
+            errors: list = []
+            findings, _, _ = scan_root(root, Config(), checker_errors=errors)
+            self.assertTrue([f for f in findings if f.checker == "stale-symbol-ref"])
+            self.assertEqual([e.checker for e in errors], ["number-drift"])
+
+    def test_clean_is_never_claimed_when_a_checker_failed(self) -> None:
+        from grounded.reporters import format_terminal
+        self.assertIn("grounded: clean", format_terminal([], 1, root=".", use_color=False))
+        out = format_terminal([], 1, root=".", use_color=False, n_checker_errors=1)
+        self.assertNotIn("grounded: clean", out)
+        self.assertIn("INCOMPLETE, not clean", out)
+
+    def test_scan_exits_3_and_names_the_checker(self) -> None:
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = self._clean_tree(td)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                healthy = main(["scan", str(root), "--no-color"])
+            self.assertEqual(healthy, 0)  # control: the tree really is clean
+            self._break("stale-symbol-ref")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = main(["scan", str(root), "--no-color"])
+            self.assertEqual(code, 3)
+            self.assertNotIn("grounded: clean", out.getvalue())
+            self.assertIn("checker error", err.getvalue())
+            self.assertIn("stale-symbol-ref", err.getvalue())
+
+    def test_a_cached_file_still_reports_its_checker_error(self) -> None:
+        # A cache hit means the checkers did not run this time, so an error
+        # recorded in v1-style entries would vanish on the next scan.
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = self._clean_tree(td)
+            cache = str(Path(td) / "cache.json")
+            self._break("stale-symbol-ref")
+            codes = []
+            for _ in range(2):
+                with contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    codes.append(main(["scan", str(root), "--no-color", "--cache", cache]))
+            self.assertEqual(codes, [3, 3])
+
+    def test_disable_is_the_explicit_escape_hatch(self) -> None:
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = self._clean_tree(td)
+            self._break("stale-symbol-ref")
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                code = main(["scan", str(root), "--no-color",
+                             "--disable", "stale-symbol-ref"])
+            self.assertEqual(code, 0)
+
+    def test_json_payload_is_not_polluted_by_checker_errors(self) -> None:
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = self._clean_tree(td)
+            self._break("stale-symbol-ref")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                main(["scan", str(root), "--format", "json"])
+            self.assertIsInstance(json.loads(out.getvalue()), list)
+
+    def test_baseline_refuses_to_persist_an_incomplete_scan(self) -> None:
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = self._tree_with_a_finding(td)
+            self._break("stale-symbol-ref")
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                code = main(["baseline", str(root)])
+            self.assertEqual(code, 3)
+            self.assertFalse((root / ".grounded-baseline.json").exists())
+
+
 class TestFix(unittest.TestCase):
     def _write(self, root: Path, files: dict[str, str]) -> None:
         for rel, text in files.items():

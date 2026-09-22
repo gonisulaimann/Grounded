@@ -24,7 +24,7 @@ grounded lsp
 
 Contracts:
 
-* `scan <file>` checks one file, exit 1 on findings, 0 when clean.
+* `scan <file>` checks one file, exit 1 on findings, 0 when clean, 3 when an enabled checker raised (incomplete scan).
 * `scan` never writes. Only `fix` (without `--dry-run`) writes, and only
   the lines of unambiguous findings.
 * `--changed` reports on-diff findings plus rename fallout: verified

@@ -21,7 +21,7 @@ Prefer the MCP tools when available (`check_path` on edited files,
 `blast_radius` before renames). Without MCP, shell out:
 
 ```console
-grounded scan <file> --quiet          # exit 1 on findings, 0 when clean
+grounded scan <file> --quiet          # exit 1 on findings, 0 when clean, 3 if a checker raised
 grounded impact <symbol> [PATH]       # definers, importers, comment claims
 grounded fix [PATH] --dry-run         # preview unambiguous rewrites
 ```

@@ -334,8 +334,9 @@ results.sarif`, then upload with `github/codeql-action/upload-sarif`.
 
 ## Coding agents
 
-`grounded scan <file>` checks one file (exit 1 on findings, 0 when clean),
-which is the contract agent lint loops expect. Verified recipes:
+`grounded scan <file>` checks one file (exit 1 on findings, 0 when clean,
+3 when a checker raised so the scan is incomplete), which is the contract
+agent lint loops expect. Verified recipes:
 
 Aider (`--lint-cmd` accepts filenames, expects non-zero on failure):
 

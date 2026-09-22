@@ -6,6 +6,17 @@ All notable changes to `grounded` are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- **A checker that raised was silently skipped, and the scan still reported
+  `clean`.** `_scan_one` caught `Exception` and continued, so a crash was
+  indistinguishable from a checker that found nothing: the summary printed
+  `grounded: clean, N file(s) scanned, 0 findings` and exited `0`. Every gate
+  built on that output could therefore only get *greener* from a bug — which
+  is exactly how `stale-doc-ref` stayed dark on any tree without a manifest
+  (its `declared_dependencies()` returned `None`) while the dogfood
+  `self-verify` gate read `clean`. Failures are now recorded per checker and
+  file, reported on stderr grouped by cause (one broken checker over a
+  10k-file tree is one line, not 10k), and a scan that has any of them can no
+  longer print the word `clean`.
 - Releases were shipping **three of four macOS/desktop binaries without
   saying so**. The `darwin-amd64` leg asked for `runs-on: macos-13`, an image
   GitHub retired, and a job pointed at a retired runner does not fail — it
@@ -21,6 +32,16 @@ All notable changes to `grounded` are documented here. Format follows
   it.
 
 ### Added
+- Exit code `3` for an incomplete scan, distinct from `1` on purpose: a
+  finding is a verdict about the repo, a checker error means there is no
+  verdict at all, so a pipeline can tell "this repo has problems" from "this
+  scan is not trustworthy". The MCP `check_path` result carries `incomplete`
+  plus `checker_errors`, and `baseline` refuses to write a file from an
+  incomplete scan — a blind spot must never be persisted into every later
+  gate. `--disable <id>` and `fail_on = "never"` remain as the two explicit
+  ways to proceed, and neither hides the error. The cache format is v2: it
+  now stores per-file checker errors, because replaying a v1 entry would
+  re-import "no findings" for a file whose checker had crashed.
 - `verify-release.yml`, an independent audit of the published asset set
   (every release, plus daily). A leg that never starts cannot report on
   itself, so the audit runs outside the producing workflow: it waits up to
@@ -36,6 +57,16 @@ All notable changes to `grounded` are documented here. Format follows
   `libpython3.11.dylib` both report `x86_64 arm64`), then gates the output
   with `lipo -archs`. A thin binary can therefore never be published, least
   of all under the amd64 name.
+
+### Changed
+- The graduation note for `stale-entrypoint` and `stale-mock-ref` no longer
+  claims precision from silence alone. "Silent on 5 real repos" is not
+  reproducible evidence and cannot distinguish a precise checker from a dead
+  one, so it is restated as measured with the checker-error count at `0` —
+  0 false positives over **15,196 files** in svelte (3,489), OmniRoute
+  (11,581), flask (88) and requests (38), where the count proves both
+  checkers actually ran. `docs/rules.md` now requires that count before
+  "silent on N repos" may be cited as evidence at all.
 
 ## [0.16.0] - 2026-09-22
 

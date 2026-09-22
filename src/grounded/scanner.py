@@ -9,12 +9,16 @@ from pathlib import Path
 
 from .checkers import CHECKERS
 from .config import Config, DEFAULT_SUFFIXES
-from .models import FileFacts, Finding
+from .models import CheckerError, FileFacts, Finding
 from .parsers import parse_file
 from .repo_index import RepoIndex
 
 CACHE_NAME = ".grounded-cache.json"
-CACHE_VERSION = 1
+# v2 stores per-file checker errors alongside findings. A v1 entry encodes
+# "no findings" for a file whose checker *crashed*, so replaying it would
+# re-import the silent-clean bug this version exists to remove: old caches
+# are rejected rather than trusted.
+CACHE_VERSION = 2
 
 _SUPPRESS = re.compile(r"grounded-disable\s*:\s*([A-Za-z0-9_][A-Za-z0-9_\-, ]*)")
 
@@ -206,7 +210,7 @@ def _init_worker(index: RepoIndex) -> None:
     _INDEX = index
 
 
-def _scan_one(args: tuple[str, str, list[str]]) -> tuple[FileFacts | None, list[Finding]]:
+def _scan_one(args: tuple[str, str, list[str]]) -> tuple[FileFacts | None, list[Finding], list[CheckerError]]:
     """Parse one file and run enabled checkers. Top-level for pickling.
 
     The repo index is shared per worker via initializer (not per task):
@@ -215,8 +219,9 @@ def _scan_one(args: tuple[str, str, list[str]]) -> tuple[FileFacts | None, list[
     rel, text, enabled = args
     facts = parse_file(Path(rel), rel, text)
     if facts is None:
-        return None, []
+        return None, [], []
     findings: list[Finding] = []
+    errors: list[CheckerError] = []
     for checker_id in enabled:
         fn = CHECKERS.get(checker_id)
         if fn is None:
@@ -224,10 +229,18 @@ def _scan_one(args: tuple[str, str, list[str]]) -> tuple[FileFacts | None, list[
         try:
             for fd in fn(facts, _INDEX) or []:
                 findings.append(fd)
-        except Exception:
-            # A checker must never crash a scan; skip pathological files.
-            continue
-    return facts, findings
+        except Exception as exc:
+            # A checker must never crash a scan — but it must never be
+            # silently skipped either. A crash returns no findings, which
+            # reads exactly like a clean file in every summary, so record it
+            # and let the caller fail instead of reporting `clean`.
+            errors.append(CheckerError(checker_id, rel, f"{type(exc).__name__}: {exc}"))
+    return facts, findings, errors
+
+
+def _error_from_dict(d: dict) -> CheckerError:
+    return CheckerError(checker=str(d.get("checker", "")), path=str(d.get("path", "")),
+                        message=str(d.get("message", "")))
 
 
 def _finding_from_dict(d: dict) -> Finding:
@@ -240,9 +253,10 @@ def _finding_from_dict(d: dict) -> Finding:
         confidence=float(d.get("confidence", 0.0)))
 
 
-def load_cache(path: Path, enabled: set[str], version: str) -> dict[str, tuple[float, int, list[dict]]]:
-    """rel -> (mtime, size, [finding dicts]). Empty on any problem: a cache
-    must never fail a scan, only accelerate it."""
+def load_cache(path: Path, enabled: set[str], version: str,
+               ) -> dict[str, tuple[float, int, list[dict], list[dict]]]:
+    """rel -> (mtime, size, [finding dicts], [checker error dicts]). Empty on
+    any problem: a cache must never fail a scan, only accelerate it."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -259,20 +273,22 @@ def load_cache(path: Path, enabled: set[str], version: str) -> dict[str, tuple[f
         if not isinstance(entry, dict):
             continue
         try:
-            out[str(rel)] = (float(entry["mtime"]), int(entry["size"]), list(entry["findings"]))
+            out[str(rel)] = (float(entry["mtime"]), int(entry["size"]),
+                             list(entry["findings"]), list(entry.get("errors", [])))
         except (KeyError, TypeError, ValueError):
             continue
     return out
 
 
 def save_cache(path: Path, enabled: set[str], version: str,
-               entries: dict[str, tuple[float, int, list[dict]]]) -> None:
+               entries: dict[str, tuple[float, int, list[dict], list[dict]]]) -> None:
     try:
         path.write_text(json.dumps({
             "version": CACHE_VERSION, "tool": version,
             "enabled": sorted(enabled),
-            "files": {rel: {"mtime": mt, "size": sz, "findings": dicts}
-                      for rel, (mt, sz, dicts) in entries.items()},
+            "files": {rel: {"mtime": mt, "size": sz, "findings": dicts,
+                            "errors": errs}
+                      for rel, (mt, sz, dicts, errs) in entries.items()},
         }), encoding="utf-8")
     except OSError:
         pass
@@ -299,7 +315,14 @@ def _suffix_of(rel: str) -> str:
 
 def scan_root(root: Path, config: Config, jobs: int | None = None,
               cache_path: Path | None = None, include_claim_surfaces: bool = False,
+              checker_errors: list[CheckerError] | None = None,
               ) -> tuple[list[Finding], list[FileFacts], RepoIndex]:
+    """Scan a tree. Pass `checker_errors` to collect checkers that raised.
+
+    The collector is optional so that read-only callers keep working, but any
+    caller that reports a verdict (CLI, MCP) must pass one: without it a
+    crashed checker is indistinguishable from a checker that found nothing.
+    """
     global _INDEX
     from . import __version__
     files, decls = collect_files(root, config, include_claim_surfaces=include_claim_surfaces)
@@ -308,7 +331,7 @@ def scan_root(root: Path, config: Config, jobs: int | None = None,
         jobs = default_jobs(len(files))
     jobs = max(1, min(jobs, len(files) or 1))
     enabled = sorted(config.enabled)
-    cached: dict[str, tuple[float, int, list[dict]]] = {}
+    cached: dict[str, tuple[float, int, list[dict], list[dict]]] = {}
     if cache_path is not None:
         cached = load_cache(cache_path, set(enabled), __version__)
     # Single disk pass: texts feed both the index build and the workers.
@@ -336,7 +359,7 @@ def scan_root(root: Path, config: Config, jobs: int | None = None,
     facts_list: list[FileFacts] = []
     findings: list[Finding] = []
     # fresh[rel] holds JSON-ready finding dicts for the cache write-back.
-    fresh: dict[str, tuple[float, int, list[dict]]] = {}
+    fresh: dict[str, tuple[float, int, list[dict], list[dict]]] = {}
     payloads: list[tuple[str, str, list[str]]] = []
     for key, text in texts.items():
         rel = rels[key]
@@ -345,9 +368,13 @@ def scan_root(root: Path, config: Config, jobs: int | None = None,
         if hit is not None and hit[0] == mt and hit[1] == sz:
             for d in hit[2]:
                 findings.append(_finding_from_dict(d))
+            if checker_errors is not None:
+                # Replayed, not dropped: a cached file's checkers did not run
+                # this time, so its recorded failures must survive the hit.
+                checker_errors.extend(_error_from_dict(d) for d in hit[3])
             facts_list.append(FileFacts(path=rel, language="cache",
                                         lines=text.splitlines()))
-            fresh[rel] = (mt, sz, hit[2])
+            fresh[rel] = (mt, sz, hit[2], hit[3])
         else:
             payloads.append((rel, text, enabled))
     if jobs == 1:
@@ -357,15 +384,18 @@ def scan_root(root: Path, config: Config, jobs: int | None = None,
         chunksize = max(1, len(payloads) // (jobs * 8))
         with ProcessPoolExecutor(max_workers=jobs, initializer=_init_worker, initargs=(index,)) as pool:
             results = list(pool.map(_scan_one, payloads, chunksize=chunksize))
-    for facts, file_findings in results:
+    for facts, file_findings, file_errors in results:
         if facts is None:
             continue
         facts_list.append(facts)
         findings.extend(file_findings)
+        if checker_errors is not None:
+            checker_errors.extend(file_errors)
         key = next((k for k, r in rels.items() if r == facts.path), None)
         if key is not None:
             fresh[facts.path] = (stats[key][0], stats[key][1],
-                                 [f.to_dict() for f in file_findings])
+                                 [f.to_dict() for f in file_findings],
+                                 [e.to_dict() for e in file_errors])
     findings.sort(key=lambda x: (x.path, x.line, x.checker))
     if cache_path is not None:
         # Merge: fresh results overwrite, untouched cached entries persist

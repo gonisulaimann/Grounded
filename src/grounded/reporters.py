@@ -22,13 +22,22 @@ DIM = "\033[2m"
 
 
 def format_terminal(findings: list[Finding], n_files: int, root: str, use_color: bool = True,
-                    n_unparsed: int = 0) -> str:
+                    n_unparsed: int = 0, n_checker_errors: int = 0) -> str:
     counts = {"lie": 0, "drift": 0, "smell": 0}
     for f in findings:
         counts[f.severity] = counts.get(f.severity, 0) + 1
     unparsed_note = f", {n_unparsed} file(s) unparsed" if n_unparsed else ""
+    err_note = f", {n_checker_errors} checker error(s)" if n_checker_errors else ""
     lines: list[str] = []
     if not findings:
+        if n_checker_errors:
+            # `clean` is a verdict about the repo. It is only true if every
+            # enabled checker actually ran — a crashed checker also returns
+            # zero findings, so saying `clean` here would assert something
+            # this run cannot know.
+            head = (f"grounded: 0 findings in {n_files} file(s){unparsed_note}, but "
+                    f"{n_checker_errors} checker error(s): INCOMPLETE, not clean.")
+            return head if not use_color else f"\033[31m{head}{RESET}"
         head = f"grounded: clean, {n_files} file(s) scanned, 0 findings{unparsed_note}."
         return head if not use_color else f"\033[32m{head}{RESET}"
     for f in findings:
@@ -45,7 +54,8 @@ def format_terminal(findings: list[Finding], n_files: int, root: str, use_color:
             lines.append(f"    {d}fix:{reset} {f.fix[:220]}")
     summary = (
         f"\ngrounded: {len(findings)} finding(s) in {n_files} file(s), "
-        f"{counts.get('lie',0)} lie(s), {counts.get('drift',0)} drift(s), {counts.get('smell',0)} smell(s){unparsed_note}."
+        f"{counts.get('lie',0)} lie(s), {counts.get('drift',0)} drift(s), {counts.get('smell',0)} smell(s)"
+        f"{unparsed_note}{err_note}."
     )
     lines.append(summary if not use_color else f"{BOLD}{summary}{RESET}")
     return "\n".join(lines)
