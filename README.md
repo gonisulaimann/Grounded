@@ -466,7 +466,7 @@ equivalent ESLint rules. `grounded` intentionally does not duplicate them;
 ## Development
 
 ```console
-python -m unittest discover -s tests   # 185 tests, stdlib only, no extras
+python -m unittest discover -s tests   # 243 tests, stdlib only, no extras
 grounded scan src                      # self-scan gate, must report clean
 grounded scan examples/v2demo          # fixture tree, expect 10 findings
 python3 corpus/run.py                  # precision corpus, exact-match
