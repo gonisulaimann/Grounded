@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grounded — the reference integrity firewall for code and AI agents</title>
+<meta name="description" content="Grounded finds comments, doc examples, imports and config strings that contradict the repository they live in. Zero dependencies, offline, deterministic. Python, JS/TS, Go, C.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="assets/icon-128.png" type="image/png">
+<link rel="apple-touch-icon" href="assets/icon-128.png">
+<link rel="canonical" href="https://gonisulaimann.github.io/Grounded/">
+<link rel="stylesheet" href="style.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Grounded — a reference integrity firewall">
+<meta property="og:description" content="Comments lie after a rename. Grounded proves which ones do — offline, in milliseconds, with zero dependencies.">
+<meta property="og:image" content="assets/wordmark-white.png">
+<meta property="og:url" content="https://gonisulaimann.github.io/Grounded/">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="wrap nav-row">
+    <a class="brand" href="#top">
+      <img src="assets/icon.png" alt="">
+      Grounded
+      <span class="pkg">v0.15.0</span>
+    </a>
+    <nav aria-label="Main">
+      <a href="#why">Why it works</a>
+      <a href="#rules">Rules</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#agents">Agents</a>
+      <a href="#install">Install</a>
+    </nav>
+    <a class="btn btn-ghost btn-sm" href="https://github.com/gonisulaimann/Grounded">GitHub <span aria-hidden="true">↗</span></a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" id="top">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow"><img src="assets/flame.png" alt=""> Reference integrity firewall</p>
+        <h1>Find what your code <em>contradicts</em>.</h1>
+        <p class="lede">
+          Grounded reads the comments, doc examples, imports and config strings in a repository
+          and reports the ones that <strong>contradict the code they live in</strong> — a call
+          that resolves nowhere, a path that does not exist, a default the code disagrees with.
+          It fires only on mechanical contradiction.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">Install Grounded</a>
+          <a class="btn btn-ghost" href="https://github.com/gonisulaimann/Grounded/blob/main/docs/rules.md">Read the rules <span aria-hidden="true">↗</span></a>
+        </div>
+        <p class="hero-meta">
+          <b>Zero dependencies.</b> No network access. Deterministic.<br>
+          Python · JavaScript/TypeScript · Go · C &nbsp;|&nbsp; 7 default rules, 4 opt-in
+        </p>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="term-title">grounded scan ./src</span>
+        </div>
+<pre><span class="p-cmd">$ grounded scan ./src</span>
+<span class="sev-lie">LIE</span> <span class="p-file">src/app.py:9</span> [stale-symbol-ref] Comment references `ghost_service` which is not defined here
+  <span class="p-key">claim:</span>    `ghost_service()`
+  <span class="p-key">evidence:</span> `ghost_service` is not defined, imported, or used in this file,
+            and no definition was found in 84 indexed source files.
+  <span class="p-key">fix:</span>      Update the comment to the current name, or remove the reference.
+
+<span class="p-cmd">$ grounded impact ghost_service</span>
+<span class="p-key">defined_in (0):</span>
+<span class="p-key">imported_by (0):</span>
+<span class="p-key">claimed_by (1):</span>
+  src/app.py
+
+<span class="p-cmd">$ grounded scan .</span>
+<span class="ok">grounded: clean, 141 file(s) scanned, 0 findings.</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <div class="strip">
+    <div class="wrap strip-row">
+      <span><span class="tick">✓</span> ZERO DEPENDENCIES</span>
+      <span><span class="tick">✓</span> OFFLINE</span>
+      <span><span class="tick">✓</span> DETERMINISTIC</span>
+      <span><span class="tick">✓</span> 0.6 MS IN-PROCESS</span>
+      <span><span class="tick">✓</span> MIT</span>
+    </div>
+  </div>
+
+  <section id="why">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Why a rule can be trusted</p>
+        <h2>A clean scan means something. A finding means something.</h2>
+        <p>
+          Linters that guess produce noise, and noise gets muted. Grounded only reports what the
+          repository itself can prove, and stays silent when it cannot see enough to be sure.
+          Every finding carries the claim, the evidence, and a fix.
+        </p>
+      </div>
+
+      <div class="sev-grid">
+        <article class="card">
+          <span class="badge b-lie">LIE · error</span>
+          <h3>A name that resolves nowhere</h3>
+          <p>
+            A comment calls <code>get_user()</code> and no such function exists in the repo, is
+            imported in the file, or is used anywhere. These are renames that left the comment
+            behind. Exit code 1 by default.
+          </p>
+        </article>
+        <article class="card">
+          <span class="badge b-drift">DRIFT · warning</span>
+          <h3>A number the code disagrees with</h3>
+          <p>
+            A comment states a timeout, port, limit or threshold that no longer matches the code
+            beside it. Warning severity: real rot, but not a broken build.
+          </p>
+        </article>
+        <article class="card">
+          <span class="badge b-smell">SMELL · note</span>
+          <h3>An anchor with nothing to hold</h3>
+          <p>
+            Bare <code>see above</code>, <code>line 42</code> anchors, and HACK/XXX/kludge markers
+            with no ticket, no expiry condition, and no way to verify them later.
+          </p>
+        </article>
+      </div>
+
+      <div class="callout">
+        <p>
+          <b>What stays silent by design:</b> imported names, standard-library and platform
+          calls, parameters and locals, docstring field lists (<code>:param:</code>,
+          <code>@param</code>), illustrative examples (“for example …”), commented-out code,
+          guarded imports, parse-failed files, and any path the scan never indexed.
+          <b>The trade is deliberate: recall for precision.</b>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="rules">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">The rule set</p>
+        <h2>Eleven contradictions, each with a name</h2>
+        <p>
+          Seven run by default and gate on <code>lie</code>. Four ship opt-in and graduate to
+          default-on only by measured precision on real repositories — never by volume.
+        </p>
+      </div>
+
+      <div class="table-scroll">
+      <table class="rules">
+        <caption>Default severity is shown per rule. <code>--enable</code> / <code>--disable</code> switch any of them.</caption>
+        <thead>
+          <tr><th scope="col">Rule</th><th scope="col">Severity</th><th scope="col">What it reports</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>stale-symbol-ref</td>
+            <td><span class="pill pill-lie">LIE</span></td>
+            <td>A comment names a call that resolves nowhere — not defined in the repo, not imported here, not used here. Prints rename suggestions when a close match exists.</td>
+          </tr>
+          <tr>
+            <td>stale-import</td>
+            <td><span class="pill pill-lie">LIE</span></td>
+            <td>A resolvable import whose module is missing, or whose name is not defined, re-exported, or a submodule there. Python, JS/TS relative imports, tsconfig aliases resolved.</td>
+          </tr>
+          <tr>
+            <td>stale-file-ref</td>
+            <td><span class="pill pill-lie">LIE</span></td>
+            <td>A comment claims a path inside the repo tree that does not exist. Other projects, framework namespaces and placeholders are ignored.</td>
+          </tr>
+          <tr>
+            <td>stale-entrypoint</td>
+            <td><span class="pill pill-lie">LIE</span></td>
+            <td>A <code>[project.scripts]</code> target or a <code>package.json</code> bin/main path pointing at nothing in the repo.</td>
+          </tr>
+          <tr>
+            <td>stale-mock-ref</td>
+            <td><span class="pill pill-lie">LIE</span></td>
+            <td>A <code>@patch</code> string naming a symbol absent from the in-repo module — the test that errors at runtime.</td>
+          </tr>
+          <tr>
+            <td>number-drift</td>
+            <td><span class="pill pill-drift">DRIFT</span></td>
+            <td>A comment states a magic number that disagrees with adjacent code.</td>
+          </tr>
+          <tr>
+            <td>fragile-anchor</td>
+            <td><span class="pill pill-smell">SMELL</span></td>
+            <td>Line anchors and <code>see above</code> without a symbol; workaround markers with no ticket or expiry.</td>
+          </tr>
+          <tr>
+            <td>stale-doc-ref <span class="pill pill-optin">opt-in</span></td>
+            <td><span class="pill pill-lie">LIE</span></td>
+            <td>A fenced doc example calling a symbol defined nowhere in the repo.</td>
+          </tr>
+          <tr>
+            <td>stale-contract-ref <span class="pill pill-optin">opt-in</span></td>
+            <td><span class="pill pill-lie">LIE</span> <span class="pill pill-drift">DRIFT</span></td>
+            <td>A deprecation target, lock claim, or env default that contradicts the repo.</td>
+          </tr>
+          <tr>
+            <td>phantom-package <span class="pill pill-optin">opt-in</span></td>
+            <td><span class="pill pill-drift">DRIFT</span></td>
+            <td>An import declared in no manifest — a dependency that happens to work locally.</td>
+          </tr>
+          <tr>
+            <td>ghost-export <span class="pill pill-optin">opt-in</span></td>
+            <td><span class="pill pill-smell">SMELL</span></td>
+            <td>A public symbol with no importers, no use, and no deliberate API marking.</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="evidence">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Measured, not asserted</p>
+        <h2>Proven on real code, in public</h2>
+        <p>
+          Benchmarking on real repositories is part of development here: every round so far has
+          surfaced and fixed a precision bug before release. Numbers below are reproducible with
+          the in-repo harness.
+        </p>
+      </div>
+
+      <div class="split">
+        <div>
+          <div class="table-scroll">
+          <table class="data">
+            <caption class="note" style="margin:0 0 12px;text-align:left">Full-tree scans · MacBook Air, 10 cores · median of 3</caption>
+            <thead>
+              <tr><th scope="col">Tree</th><th scope="col">Files</th><th scope="col">Scan</th><th scope="col">Findings</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>django</td><td>2,977</td><td class="n">16.7 s</td><td>1 true lie + fixture noise</td></tr>
+              <tr><td>cpython 3.13</td><td>3,049</td><td class="n">47.2 s</td><td>true moved-file refs</td></tr>
+              <tr><td>grpc-go</td><td>1,068</td><td class="n">4.4 s</td><td>true missing implementation</td></tr>
+              <tr><td>express</td><td>141</td><td class="n">0.6 s</td><td class="ok">clean</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p class="note">
+            In-process single-file check: <b>0.6 ms</b>. Cold CLI start: 58 ms, dominated by the
+            interpreter, not by checking. Tests catch everything; Grounded is the millisecond
+            pre-filter before you pay for them.
+          </p>
+        </div>
+
+        <div>
+          <div class="table-scroll">
+          <table class="data">
+            <caption class="note" style="margin:0 0 12px;text-align:left">Precision round, 2026-09-22 · before → after</caption>
+            <thead>
+              <tr><th scope="col">Tree</th><th scope="col">Before</th><th scope="col">After</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>svelte <span class="p-key">(opt-in rules)</span></td><td>23</td><td class="n">1</td></tr>
+              <tr><td>a production TS monorepo <span class="p-key">(src/lib)</span></td><td>106</td><td class="n">48</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p class="note">
+            The svelte round removed 22 false positives and left exactly one finding — a genuinely
+            unreferenced function in a test file. The monorepo round removed 58 false import lies
+            with <b>zero recall loss</b>: every other rule’s count is identical before and after.
+          </p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p>
+          <b>238 tests, 37 adversarial corpus cases, stdlib only.</b> The corpus holds planted
+          agent-style rot that must fire next to legitimate lookalikes that must stay silent —
+          a silence case that passes vacuously is treated as a failure, not a green.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="agents">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Built for the loop</p>
+        <h2>Made for agents that edit faster than they read</h2>
+        <p>
+          An assistant renames a function and leaves the comment behind. An hour later another
+          assistant trusts the comment and builds against a call that does not exist. Grounded is
+          the check that runs between those two moments.
+        </p>
+      </div>
+
+      <div class="surface-grid">
+        <article class="card">
+          <h3>MCP server <span class="chip">stdio</span></h3>
+          <p>
+            Three tools for agents that speak Model Context Protocol: <code>check_path</code>,
+            <code>explain_checker</code>, and <code>blast_radius</code> — everything touching a
+            symbol before you rename it. Filesystem access is confined to the server root.
+          </p>
+        </article>
+        <article class="card">
+          <h3>LSP 3.17 <span class="chip">editors</span></h3>
+          <p>
+            <code>grounded lsp</code> speaks Language Server Protocol over stdio: instant
+            diagnostics (lie as error, drift as warning, smell as information) plus quick-fix
+            actions for unambiguous renames and moved paths. Neovim, VS Code, Cursor, Zed, Emacs.
+          </p>
+        </article>
+        <article class="card">
+          <h3>Hooks and CI <span class="chip">gate</span></h3>
+          <p>
+            <code>grounded scan &lt;file&gt;</code> checks one file and exits non-zero on
+            findings — the contract Aider’s <code>--lint-cmd</code> and an editor
+            <code>PostToolUse</code> hook expect. Plus a first-party GitHub Action and a
+            pre-commit hook.
+          </p>
+        </article>
+      </div>
+
+      <div class="split" style="margin-top:30px">
+<pre class="code"><span class="c"># MCP, for agents that can use tools directly</span>
+{
+  "mcpServers": {
+    "grounded": { "command": "grounded", "args": ["mcp", "--root", "."] }
+  }
+}</pre>
+<pre class="code"><span class="c"># Claude Code: after every edit, check the diff</span>
+{
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "Edit|Write",
+        "hooks": [{ "type": "command",
+                    "command": "grounded scan . --changed --quiet" }] }
+    ]
+  }
+}</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="adopt">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Adopting on an existing codebase</p>
+        <h2>Start from today, not from zero</h2>
+        <p>
+          Two mechanisms, composable. Both keep the full-tree scan and filter reporting only — the
+          index is still built from the whole tree, because cross-file resolution needs it.
+        </p>
+      </div>
+
+      <div class="split">
+<pre class="code"><span class="c"># record today's findings once, commit the baseline, gate on the delta</span>
+$ grounded baseline . --output .grounded-baseline.json
+$ git add .grounded-baseline.json
+$ grounded scan . --baseline .grounded-baseline.json
+
+<span class="c"># fingerprints cover rule, path and claim text — never line numbers</span></pre>
+<pre class="code"><span class="c"># gate pull requests on changed lines only</span>
+$ grounded scan . --changed              <span class="c"># working tree vs HEAD</span>
+$ grounded scan . --changed origin/main  <span class="c"># branch vs base (CI)</span>
+
+<span class="c"># rename fallout on untouched lines still reports: a finding whose</span>
+<span class="c"># claim names a symbol the diff touched is never filtered away.</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">What it deliberately does not do</p>
+        <h2>Scope is a feature</h2>
+      </div>
+      <div class="honest">
+        <ul>
+          <li><b>Docstring contracts</b> (parameter lists, return sections, raised exceptions) are covered precisely by darglint and pydoclint for Python and eslint-plugin-jsdoc for JS/TS. Grounded names the incumbent instead of duplicating it.</li>
+          <li><b>Commented-out code</b> is Ruff ERA001’s job. Grounded uses those blocks only as suppression evidence.</li>
+          <li><b>Unverbed name mentions</b> are skipped. A rename noted without backticks or a reference verb is missed — recall traded for precision.</li>
+        </ul>
+        <ul>
+          <li><b>Syntactic, not semantic.</b> JavaScript/TypeScript, Go and C analysis reads imports and identifiers, not a full type graph.</li>
+          <li><b>Framework namespaces stay silent</b> (template paths, URL names). Platform APIs named in prose can still report — judged on sight.</li>
+          <li><b>Partial scans never claim absence</b> for what they did not index: a sub-tree scan can only ever report fewer findings than its enclosing root, never more.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="install" id="install">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Install</p>
+        <h2>No Python management required</h2>
+        <p>
+          A standalone binary, a Homebrew tap, or the Python package. It exits 1 when any finding
+          meets <code>--fail-on</code> (default: <code>lie</code>), so the default is already a
+          usable CI gate.
+        </p>
+      </div>
+
+      <div class="install-grid">
+        <div class="install-card">
+          <p class="os">macOS · Linux</p>
+          <h3>One line, standalone binary</h3>
+<pre>curl -fsSL https://raw.githubusercontent.com/gonisulaimann/Grounded/main/install.sh | sh</pre>
+          <p>Installs the standalone binary, or defers to an existing uv/pip/brew.</p>
+        </div>
+        <div class="install-card">
+          <p class="os">Windows</p>
+          <h3>PowerShell</h3>
+<pre>irm https://raw.githubusercontent.com/gonisulaimann/Grounded/main/install.ps1 | iex</pre>
+          <p>Same standalone binary path on Windows.</p>
+        </div>
+        <div class="install-card">
+          <p class="os">Python 3.10+</p>
+          <h3>pip · uv</h3>
+<pre>pip install grounded-lint
+
+uvx --from grounded-lint grounded scan .</pre>
+          <p>uvx runs it with no install step at all — measured 0.05 s cached startup.</p>
+        </div>
+        <div class="install-card">
+          <p class="os">Homebrew</p>
+          <h3>Tap</h3>
+<pre>brew install gonisulaimann/tap/grounded</pre>
+          <p>And from source: <code>git clone</code>, then <code>pip install -e .</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div class="foot-brand">
+        <img src="assets/icon.png" alt="">
+        <div>
+          <strong>Grounded</strong>
+          <p>A reference integrity firewall for code and AI agents.</p>
+        </div>
+      </div>
+      <nav class="foot-nav" aria-label="Project links">
+        <a href="https://github.com/gonisulaimann/Grounded">GitHub</a>
+        <a href="https://github.com/gonisulaimann/Grounded/blob/main/docs/rules.md">Rules</a>
+        <a href="https://grounded-lint.readthedocs.io/">Docs</a>
+        <a href="https://github.com/gonisulaimann/Grounded/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="https://github.com/gonisulaimann/Grounded/issues">Issues</a>
+        <a href="https://github.com/gonisulaimann/Grounded/blob/main/CONTRIBUTING.md">Contribute</a>
+      </nav>
+    </div>
+    <p class="legal">
+      MIT licensed. Runs offline: no network access, nothing leaves the machine.
+      This page is static — no scripts, no external fonts, no trackers.
+    </p>
+  </div>
+</footer>
+</body>
+</html>
