@@ -880,5 +880,42 @@ class TestCheckText(unittest.TestCase):
             self.assertIn("get_account", out[0]["detail"])
 
 
+class TestRegistryPilot(unittest.TestCase):
+    def _registry(self):
+        import importlib.util
+        path = Path(__file__).resolve().parent.parent / "bench" / "registry.py"
+        spec = importlib.util.spec_from_file_location("bench_registry", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_find_readme_variants(self):
+        reg = self._registry()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertIsNone(reg.find_readme(root))
+            (root / "README.rst").write_text("hi\n", encoding="utf-8")
+            self.assertEqual(reg.find_readme(root).name, "README.rst")
+
+    def test_local_package_fires_on_ghost(self):
+        reg = self._registry()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "mypkg").mkdir()
+            (root / "mypkg" / "__init__.py").write_text(
+                "def real_fn():\n    return 1\n", encoding="utf-8")
+            (root / "README.md").write_text(
+                "# Demo\n\n```python\nfrom mypkg import real_fn\n\n"
+                "real_fn()\nghost_fn()\n```\n", encoding="utf-8")
+            rep = reg.run_package("fakepkg", local=root)
+            self.assertEqual(rep["version"], "local")
+            self.assertEqual([u["call"] for u in rep["unknown"]], ["ghost_fn()"])
+
+    def test_missing_archive_is_error_not_crash(self):
+        reg = self._registry()
+        rep = reg.run_package("no-such-package-xyz-grounded")
+        self.assertIn("error", rep)
+
+
 if __name__ == "__main__":
     unittest.main()

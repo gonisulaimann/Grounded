@@ -52,5 +52,6 @@ nav:
   - Agent Skill: agent-skill.md
   - Architecture: internals.md
   - Benchmarks: benchmarks.md
+  - Registry Grid: registry.md
   - Roadmap: roadmap.md
   - FAQ: faq.md
