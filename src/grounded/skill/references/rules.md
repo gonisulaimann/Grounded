@@ -18,6 +18,9 @@ Condensed checker semantics for agents. Full prose lives in the
 | `unclosed-fence` | lie | Markdown fence that never closes, or is swallowed by an open block (content renders as code) | declared nesting scaffolds (` ````markdown ` around ` ```python `), bare fences inside a block |
 | `phantom-package` | drift, opt-in only | import declared in no manifest | stdlib, in-repo, all dep groups, @types-covered hosts |
 | `stale-cli-ref` | lie, opt-in only | documented `grounded` call with unknown subcommand/flag | prose mentions, synopsis meta-syntax, program output |
+| `stale-cli-flag` | lie, opt-in only | documented call of this repo's own program with an undeclared long flag | prose mentions, opaque frameworks (typer/fire/yargs), bare specifiers |
+| `stale-api-ref` | lie, opt-in only | HTTP-call literal with no route in this repo's JSON OpenAPI/Swagger docs | bare strings, filesystem paths, repos without a spec |
+| `slop-package` | lie/drift, opt-in only | import naming a distribution missing from (lie) or newborn on (drift) the public registry | stdlib, in-repo, guarded imports, offline runs |
 
 Exit codes: `0` clean, `1` a finding at or above `--fail-on` (default
 `lie`), `2` usage or environment error, `3` an enabled checker raised

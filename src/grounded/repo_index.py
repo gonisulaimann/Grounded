@@ -1032,6 +1032,39 @@ class RepoIndex:
         # keys are handled above) is a default export, named or not.
         if re.search(r"module\.exports\s*=(?![=>])\s*(?![{\s])", text):
             self.file_exports.setdefault(rel, set()).add("default")
+        base = rel.rsplit("/", 1)[-1]
+        suffix = "." + base.rsplit(".", 1)[-1].lower() if "." in base else ""
+        if suffix in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+                      ".mts", ".cts"):
+            self._merge_tree_sitter_defs(text, rel, suffix)
+
+    def _merge_tree_sitter_defs(self, text: str, rel: str, suffix: str) -> None:
+        """Optional tree-sitter enrichment (see tree_sitter_js module).
+
+        Unions declaration names and export names the regexes cannot see
+        (multi-line headers, ambient `const enum`, namespaces, abstract
+        classes, specifier aliases). Suppression-only: extra names can
+        silence a finding, never invent one. No grammars installed means
+        no change at all, which is exactly what CI pins.
+        """
+        try:
+            from .tree_sitter_js import extract_js_defs
+        except ImportError:
+            return
+        try:
+            extra = extract_js_defs(text, suffix)
+        except Exception:
+            return
+        if not extra:
+            return
+        for name in extra["symbols"]:
+            self._record(self.js_symbols, name, rel)
+        if extra["exports"]:
+            self.file_exports.setdefault(rel, set()).update(extra["exports"])
+            self.file_esm.add(rel)
+        if extra["has_default"]:
+            self.file_exports.setdefault(rel, set()).add("default")
+            self.file_esm.add(rel)
 
     def has_symbol(self, name: str) -> bool:
         if not name:

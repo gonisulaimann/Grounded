@@ -13,6 +13,7 @@
 | `stale-cli-ref` | lie (error), **experimental, opt-in only** | A documented `grounded` invocation with an unknown subcommand or flag (verified against the live parser). |
 | `stale-cli-flag` | lie (error), **experimental, opt-in only** | Docs (Markdown, reST, Sphinx `.txt`) invoke one of this repo's own programs (`[project.scripts]`, `console_scripts`, package.json `bin`, Go `cmd/<name>`) with a long flag that no argparse/click/pytest `addoption`/Go `flag`/cobra/commander definition in the repo declares. |
 | `stale-api-ref` | lie (error), **experimental, opt-in only** | An HTTP-call string literal (`requests.get("/v2/gone")`, `fetch(...)`) with no matching route in this repo's own JSON OpenAPI/Swagger documents (templates match segment-wise; bare strings, filesystem paths, and repos without a spec stay silent). |
+| `slop-package` | lie/drift (error/warning), **experimental, opt-in only** | A third-party import naming a distribution missing from the public registry (lie: hallucinated or hijackable), or registered within 48 hours (drift: verify). The one network checker: offline means silence, and default scans stay offline. |
 | `unclosed-fence` | lie (error) | A Markdown fence that never closes, or one the renderer swallows because an earlier block is still open: the content after it renders as code, and the doc checkers' fence state inverts from there on. Graduated 2026-09-22 — promoted alongside the shared CommonMark fence walk, with the differential fuzz pinning the walk. |
 ## Experimental checkers
 

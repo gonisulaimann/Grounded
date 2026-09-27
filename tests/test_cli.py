@@ -815,5 +815,270 @@ class TestWatch(unittest.TestCase):
         self.assertEqual(main(["watch", "/nonexistent-grounded-dir"]), 2)
 
 
+class TestPr(unittest.TestCase):
+    def _write(self, root: Path, files: dict[str, str]) -> None:
+        for rel, text in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+
+    def _git(self, root: Path, *args: str) -> None:
+        import os
+        import subprocess
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        subprocess.run(["git", *args], cwd=root, check=True,
+                       capture_output=True, env=env, timeout=60)
+
+    def _fixable(self, root: Path) -> None:
+        self._write(root, {
+            "src/real/deep.py": "X = 1\n",
+            "a.py": "# See src/old/deep.py for details.\nY = 2\n",
+        })
+
+    def test_dry_run_prints_plan_and_body(self):
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._fixable(root)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(main(["pr", str(root), "--dry-run"]), 0)
+            out = buf.getvalue()
+            self.assertIn("src/real/deep.py", out)
+            self.assertIn("Generated mechanically by Grounded", out)
+            self.assertIn("src/old/deep.py", (root / "a.py").read_text())
+
+    def test_dirty_tree_refused(self):
+        import shutil
+        from grounded.cli import main
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._fixable(root)
+            self._git(root, "init", "-q")
+            self._git(root, "add", "-A")
+            self._git(root, "commit", "-qm", "init")
+            (root / "a.py").write_text("# See src/old/deep.py for details.\n# dirty work in progress\n",
+                                       encoding="utf-8")
+            self.assertEqual(main(["pr", str(root), "--dry-run"]), 0)
+            import contextlib
+            import io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(main(["pr", str(root)]), 2)
+            self.assertIn("dirty", err.getvalue())
+
+    def test_full_flow_with_stub_gh(self):
+        import contextlib
+        import io
+        import os
+        import shutil
+        import stat
+        import subprocess
+        from unittest import mock
+        from grounded.cli import main
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bindir = Path(td) / "bin"
+            bindir.mkdir()
+            log = bindir / "gh-args.log"
+            stub = bindir / "gh"
+            stub.write_text("#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n"
+                            "echo https://github.com/o/r/pull/1\n",
+                            encoding="utf-8")
+            stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+            self._fixable(root)
+            self._git(root, "init", "-q")
+            self._git(root, "add", "-A")
+            self._git(root, "commit", "-qm", "init")
+            self._git(root, "remote", "add", "origin", "https://x.invalid/o/r.git")
+            env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ["PATH"],
+                       GH_LOG=str(log))
+            buf = io.StringIO()
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                rc = main(["pr", str(root), "--title", "fix test"])
+            # push to the invalid remote fails: the fix lands on a local
+            # branch + commit, and the command reports honestly (rc 2)
+            # instead of faking a PR URL.
+            self.assertEqual(rc, 2)
+            self.assertIn("src/real/deep.py", (root / "a.py").read_text())
+            branches = subprocess.run(["git", "branch", "--list", "grounded-fixes-*"],
+                                      cwd=root, capture_output=True, text=True,
+                                      timeout=60).stdout
+            self.assertIn("grounded-fixes-", branches)
+            log_text = subprocess.run(["git", "log", "--format=%s", "-1"],
+                                      cwd=root, capture_output=True, text=True,
+                                      timeout=60).stdout.strip()
+            self.assertEqual(log_text, "fix test")
+            # gh itself was never reached (push failed first)
+            self.assertFalse(log.exists())
+
+    def test_pr_created_against_local_remote(self):
+        import contextlib
+        import io
+        import os
+        import shutil
+        import stat
+        import subprocess
+        from unittest import mock
+        from grounded.cli import main
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bindir = Path(td) / "bin"
+            bindir.mkdir()
+            log = bindir / "gh-args.log"
+            stub = bindir / "gh"
+            stub.write_text("#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\n"
+                            "echo https://github.com/o/r/pull/7\n",
+                            encoding="utf-8")
+            stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+            self._fixable(root)
+            self._git(root, "init", "-q")
+            self._git(root, "add", "-A")
+            self._git(root, "commit", "-qm", "init")
+            bare = Path(td) / "remote.git"
+            subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True,
+                           capture_output=True, timeout=60)
+            self._git(root, "remote", "add", "origin", str(bare))
+            env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ["PATH"],
+                       GH_LOG=str(log))
+            buf = io.StringIO()
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    contextlib.redirect_stdout(buf):
+                rc = main(["pr", str(root), "--title", "fix test"])
+            self.assertEqual(rc, 0)
+            self.assertIn("https://github.com/o/r/pull/7", buf.getvalue())
+            recorded = log.read_text(encoding="utf-8")
+            self.assertIn("pr create", recorded)
+            self.assertIn("fix test", recorded)
+            self.assertIn("Generated mechanically by Grounded", recorded)
+
+    def test_nothing_to_fix(self):
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write(root, {"a.py": "X = 1\n"})
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(main(["pr", str(root), "--dry-run"]), 0)
+            self.assertIn("nothing unambiguous", buf.getvalue())
+
+
+class TestGenerateAgentRules(unittest.TestCase):
+    def _tree(self, root: Path) -> None:
+        (root / "src").mkdir()
+        (root / "tests").mkdir()
+        (root / "package.json").write_text(
+            '{"scripts": {"test": "node --test", "build": "tsc"}}', encoding="utf-8")
+        (root / "Makefile").write_text("lint:\n\truff check .\n", encoding="utf-8")
+
+    def test_verified_content_only(self):
+        import contextlib
+        import io
+        import os
+        import re
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._tree(root)
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.assertEqual(main(["generate-agent-rules"]), 0)
+            finally:
+                os.chdir(cwd)
+            text = (root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn("npm run test", text)
+            self.assertIn("make lint", text)
+            # every claimed directory exists; every claimed command names
+            # a real source (no invented paths, no invented commands)
+            for m in re.finditer(r"`([A-Za-z0-9_][A-Za-z0-9_.\-/]*/)`", text):
+                self.assertTrue((root / m.group(1)).exists(), m.group(1))
+
+    def test_existing_kept_without_force(self):
+        import contextlib
+        import io
+        import os
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._tree(root)
+            (root / "AGENTS.md").write_text("mine\n", encoding="utf-8")
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(main(["generate-agent-rules"]), 2)
+            finally:
+                os.chdir(cwd)
+            self.assertEqual((root / "AGENTS.md").read_text(encoding="utf-8"), "mine\n")
+
+
+class TestBadge(unittest.TestCase):
+    def test_prints_shields_snippet(self):
+        import contextlib
+        import io
+        from grounded.cli import main
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(main(["badge"]), 0)
+        out = buf.getvalue()
+        self.assertIn("img.shields.io", out)
+        self.assertIn("github.com/gonisulaimann/Grounded", out)
+
+    def test_check_gates_dirty_readme(self):
+        import contextlib
+        import io
+        import os
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "README.md").write_text(
+                "# Demo\n\n```python\nphantom_call_xyz()\n```\n",
+                encoding="utf-8")
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    self.assertEqual(main(["badge", "--check"]), 1)
+            finally:
+                os.chdir(cwd)
+
+    def test_check_passes_clean_readme(self):
+        import contextlib
+        import io
+        import os
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "README.md").write_text("# Demo\n\nNo code here.\n",
+                                            encoding="utf-8")
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.assertEqual(main(["badge", "--check"]), 0)
+            finally:
+                os.chdir(cwd)
+            self.assertIn("img.shields.io", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

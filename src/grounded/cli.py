@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -87,6 +88,22 @@ def build_parser() -> argparse.ArgumentParser:
     fx.add_argument("path", nargs="?", default=".", help="directory to scan (default: .)")
     fx.add_argument("--dry-run", action="store_true", help="print fixes without writing")
     fx.add_argument("--config", default=None, help="explicit config file (grounded.toml)")
+
+    pr = sub.add_parser("pr", help="apply unambiguous fixes on a branch and open a pull request")
+    pr.add_argument("path", nargs="?", default=".", help="directory to scan (default: .)")
+    pr.add_argument("--title", default=None, help="PR title (default: generated from fix count)")
+    pr.add_argument("--dry-run", action="store_true", help="print the plan and PR body without writing")
+    pr.add_argument("--config", default=None, help="explicit config file (grounded.toml)")
+
+    gr = sub.add_parser("generate-agent-rules",
+                        help="write an AGENTS.md containing only verified paths and commands")
+    gr.add_argument("--output", "-o", default="AGENTS.md", help="file to write (default: ./AGENTS.md)")
+    gr.add_argument("--force", action="store_true", help="overwrite existing file")
+    gr.add_argument("--dry-run", action="store_true", help="print without writing")
+
+    bd = sub.add_parser("badge", help="print a Reference Integrity badge; --check gates it on a clean README")
+    bd.add_argument("--check", action="store_true",
+                    help="verify README code fences first (exit 1 on lies)")
 
     mc = sub.add_parser("mcp", help="serve grounded over stdio as an MCP server for coding agents")
     mc.add_argument("--root", default=".", help="server root; all paths stay inside it (default: .)")
@@ -491,6 +508,107 @@ def cmd_fix(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pr_body(fixes: list, sym_fixes: list) -> str:
+    """PR body listing every mechanical rewrite with its evidence."""
+    lines = ["# fix(integrity): update stale references",
+             "",
+             "Mechanical rewrites only — every item below was unambiguous "
+             "(exactly one rename candidate, same-directory preferred) and "
+             "no runtime logic was touched.",
+             ""]
+    for f, replacement, ln in fixes:
+        lines.append(f"- `{f.path}:{ln}`: `{f.claim}` -> `{replacement}` "
+                     f"[{f.checker}]")
+    for f, old_seg, new_seg, ln in sym_fixes:
+        lines.append(f"- `{f.path}:{ln}`: `{old_seg}()` -> `{new_seg}()` "
+                     f"[{f.checker}]")
+    lines += ["",
+              "---",
+              "Generated mechanically by Grounded (reference integrity "
+              "firewall). Each line above cites the finding it resolves; "
+              "revert any single line without affecting the rest."]
+    return "\n".join(lines)
+
+
+def cmd_pr(args: argparse.Namespace) -> int:
+    from datetime import datetime, timezone
+    from .delta import GitError, _git
+    from .fix import apply_fixes, apply_symbol_fixes, file_fix_candidates, symbol_fix_candidates
+    given = Path(args.path)
+    root = given.resolve()
+    if not root.exists():
+        print(f"grounded: path does not exist: {args.path}", file=sys.stderr)
+        return 2
+    root, only = resolve_scan_scope(root)
+    config = _load_config(root, explicit=args.config)
+    findings, facts, index = scan_root(root, config, index_cache=_index_cache_on(args))
+    facts_by_path = {f.path: f for f in facts}
+    findings, _ = apply_suppressions(findings, facts_by_path)
+    findings = [f for f in findings if in_scope(f.path, only)]
+    fixes = file_fix_candidates(findings, root, config=config)
+    sym_fixes = symbol_fix_candidates(findings, root, index)
+    if not fixes and not sym_fixes:
+        print("grounded pr: nothing unambiguous to rewrite.")
+        return 0
+    total = len(fixes) + len(sym_fixes)
+    title = args.title or f"fix(integrity): update {total} stale reference(s)"
+    body = _pr_body(fixes, sym_fixes)
+    if args.dry_run:
+        print(body)
+        return 0
+    import shutil
+    import subprocess
+    if shutil.which("git") is None or shutil.which("gh") is None:
+        print("grounded pr: needs `git` and `gh` on PATH "
+              "(https://cli.github.com).", file=sys.stderr)
+        return 2
+    try:
+        status = _git(root, "status", "--porcelain=v1", "--untracked-files=no")
+    except GitError as exc:
+        print(f"grounded pr: not a git repo or git failed: {exc}", file=sys.stderr)
+        return 2
+    if status.strip():
+        print("grounded pr: working tree is dirty; commit or stash first "
+              "(refusing to mix your edits with mechanical fixes).", file=sys.stderr)
+        return 2
+    try:
+        base = _git(root, "branch", "--show-current").strip() or "main"
+    except GitError:
+        base = "main"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    branch = f"grounded-fixes-{stamp}"
+    try:
+        apply_fixes(root, fixes, dry_run=False)
+        apply_symbol_fixes(root, sym_fixes, dry_run=False)
+        changed = _git(root, "status", "--porcelain=v1", "--untracked-files=no")
+        if not changed.strip():
+            print("grounded pr: fixes applied cleanly but tree unchanged; "
+                  "nothing to propose.", file=sys.stderr)
+            return 0
+        _git(root, "checkout", "-b", branch)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", title)
+        _git(root, "push", "-u", "origin", branch)
+    except GitError as exc:
+        print(f"grounded pr: git failed: {exc}", file=sys.stderr)
+        return 2
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "create", "--title", title, "--body", body,
+             "--base", base, "--head", branch],
+            cwd=root, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"grounded pr: branch {branch} pushed, but `gh pr create` "
+              f"failed: {exc}", file=sys.stderr)
+        return 2
+    if proc.returncode != 0:
+        print(f"grounded pr: branch {branch} pushed, but `gh pr create` "
+              f"failed: {(proc.stderr or proc.stdout).strip()[:300]}", file=sys.stderr)
+        return 2
+    print(proc.stdout.strip())
+    return 0
+
+
 _CLAUDE_HOOK_CMD = "grounded hook claude-code"
 _CLAUDE_HOOK = {
     "matcher": "Edit|Write|MultiEdit",
@@ -529,6 +647,134 @@ def _precommit_conf() -> str:
         "      - id: grounded\n"
         "      - id: grounded-fences\n"
     )
+
+
+def _agent_rules_text(root: Path) -> str:
+    """AGENTS.md content where every path exists and every command was
+    read from a real file. Nothing is inferred, guessed, or templated:
+    a claim the tree cannot prove is omitted, so the file cannot rot at
+    birth. Re-run after restructuring (or let the pre-commit hook remind
+    you: stale paths in here are exactly what stale-file-ref catches)."""
+    import json as _json
+    lines = ["# Agent rules (generated by `grounded generate-agent-rules`)",
+             "",
+             "Every path below was verified to exist and every command was",
+             "read from a real config file when this was generated. Re-run",
+             "`grounded generate-agent-rules --force` after restructuring.",
+             ""]
+    lines.append("## Layout")
+    try:
+        kids = sorted(p for p in root.iterdir()
+                      if p.is_dir() and not p.name.startswith(".")
+                      and p.name not in {"node_modules", "__pycache__", "dist",
+                                         "build", "vendor", "target"})
+    except OSError:
+        kids = []
+    if kids:
+        for d in kids[:12]:
+            lines.append(f"- `{d.name}/`")
+    else:
+        lines.append("- (no top-level directories found)")
+    lines.append("")
+    cmds: list[tuple[str, str]] = []  # (command, source)
+    pj = root / "package.json"
+    if pj.is_file():
+        try:
+            scripts = (_json.loads(pj.read_text(encoding="utf-8")) or {}).get("scripts") or {}
+        except ValueError:
+            scripts = {}
+        if isinstance(scripts, dict):
+            for name in ("test", "lint", "build", "start"):
+                if isinstance(scripts.get(name), str):
+                    cmds.append((f"npm run {name}", "package.json scripts"))
+    for makefile in ("Makefile", "makefile", "GNUmakefile", "justfile", "Justfile"):
+        mf = root / makefile
+        if not mf.is_file():
+            continue
+        try:
+            text = mf.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*:(?:[^=]|$)", line)
+            if m and m.group(1) not in (".PHONY",):
+                runner = "just" if "just" in makefile.lower() else "make"
+                cmds.append((f"{runner} {m.group(1)}", makefile))
+                if len(cmds) >= 8:
+                    break
+        if len(cmds) >= 8:
+            break
+    if (root / ".github" / "workflows").is_dir():
+        try:
+            wfs = sorted(p.name for p in (root / ".github" / "workflows").iterdir()
+                         if p.suffix in (".yml", ".yaml"))[:4]
+        except OSError:
+            wfs = []
+        if wfs:
+            cmds.append((f"CI runs on push ({', '.join(wfs)})", ".github/workflows"))
+    lines.append("## Commands")
+    if cmds:
+        seen: set[str] = set()
+        for cmd, src in cmds:
+            if cmd not in seen:
+                seen.add(cmd)
+                lines.append(f"- `{cmd}` ({src})")
+    else:
+        lines.append("- (no test/lint/build commands discovered in manifests)")
+    lines += ["",
+              "## Reference integrity (always true)",
+              "",
+              "- After editing, run `grounded scan . --changed` and fix lies",
+              "  before tests or commits.",
+              "- `grounded impact SYMBOL` lists everything touching a name",
+              "  before you rename it.",
+              "- A finding names claim, evidence, and fix: act on evidence,",
+              "  never on the model's memory of the code.",
+              ""]
+    return "\n".join(lines)
+
+
+_BADGE_MD = ("[![Reference Integrity]"
+              "(https://img.shields.io/badge/Reference%20Integrity-Grounded-brightgreen)]"
+              "(https://github.com/gonisulaimann/Grounded)")
+
+
+def cmd_badge(args: argparse.Namespace) -> int:
+    if args.check:
+        from .scanner import scan_root
+        root = Path.cwd()
+        config = _load_config(root, explicit=None)
+        config.enabled = (set(config.enabled)
+                          | {"stale-doc-ref", "unclosed-fence"})
+        findings, _, index = scan_root(root, config)
+        readme = [f for f in findings if f.path == "README.md"
+                  and f.severity == "lie"]
+        if readme:
+            print(f"grounded badge: README has {len(readme)} unverified "
+                  f"code claim(s); fix them before displaying the badge.",
+                  file=sys.stderr)
+            for f in readme:
+                print(f"  README.md:{f.line} [{f.checker}] {f.title}",
+                      file=sys.stderr)
+            return 1
+    print(_BADGE_MD)
+    return 0
+
+
+def cmd_generate_agent_rules(args: argparse.Namespace) -> int:
+    root = Path.cwd()
+    target = root / (args.output or "AGENTS.md")
+    if target.exists() and not args.force:
+        print(f"grounded: {target} already exists (use --force to overwrite)",
+              file=sys.stderr)
+        return 2
+    text = _agent_rules_text(root)
+    if args.dry_run:
+        print(text)
+        return 0
+    target.write_text(text, encoding="utf-8")
+    print(f"grounded: wrote {target} (every path verified, every command read from config)")
+    return 0
 
 
 def _init_precommit(root: Path, force: bool, dry_run: bool) -> str:
@@ -840,6 +1086,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_baseline(args)
     if args.cmd == "fix":
         return cmd_fix(args)
+    if args.cmd == "pr":
+        return cmd_pr(args)
+    if args.cmd == "generate-agent-rules":
+        return cmd_generate_agent_rules(args)
+    if args.cmd == "badge":
+        return cmd_badge(args)
     if args.cmd == "mcp":
         from .mcp import serve as serve_mcp
         return serve_mcp(Path(args.root).resolve())

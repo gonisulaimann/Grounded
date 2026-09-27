@@ -938,5 +938,40 @@ class TestRegistryPilot(unittest.TestCase):
         self.assertIn("error", rep)
 
 
+class TestNpmShim(unittest.TestCase):
+    NPM = Path(__file__).resolve().parent.parent / "npm"
+
+    def test_asset_mapping_this_machine(self):
+        import shutil
+        import subprocess
+        if shutil.which("node") is None:
+            self.skipTest("node not installed")
+        out = subprocess.run(
+            ["node", "-e", "console.log(require('./bin/grounded').assetName())"],
+            cwd=str(self.NPM), capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr[-300:])
+        self.assertTrue(out.stdout.strip().startswith("grounded-"))
+
+    def test_argv_and_exit_passthrough(self):
+        import shutil
+        import stat
+        import subprocess
+        if shutil.which("node") is None:
+            self.skipTest("node not installed")
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            shutil.copy(self.NPM / "bin" / "grounded", d / "grounded")
+            asset = d / "grounded-darwin-arm64"
+            asset.write_text('#!/bin/sh\necho "ARGS:$@"\nexit 3\n', encoding="utf-8")
+            asset.chmod(asset.stat().st_mode | stat.S_IEXEC)
+            import sys
+            if sys.platform != "darwin" or __import__("platform").machine() != "arm64":
+                self.skipTest("fake asset only matches darwin/arm64 runner")
+            proc = subprocess.run(["node", str(d / "grounded"), "--format", "json"],
+                                  capture_output=True, text=True, timeout=60)
+            self.assertEqual(proc.returncode, 3)
+            self.assertIn("ARGS:--format json", proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

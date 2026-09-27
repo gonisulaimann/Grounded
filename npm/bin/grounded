@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+// Shim: exec the platform binary downloaded at install time, forwarding
+// stdio, arguments, signals, and the exit code. `npx grounded scan`
+// must behave exactly like the binary (exit 1 on findings, 2 on usage
+// errors, 3 on incomplete scans) or gates built on it misread results.
+"use strict";
+const { spawn } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+
+function assetName() {
+  const plat = process.platform;
+  const arch = process.arch;
+  if (plat === "darwin" && arch === "arm64") return "grounded-darwin-arm64";
+  if (plat === "darwin" && arch === "x64") return "grounded-darwin-amd64";
+  if (plat === "linux" && arch === "x64") return "grounded-linux-amd64";
+  if (plat === "win32" && arch === "x64") return "grounded-windows-amd64.exe";
+  return null;
+}
+
+function main() {
+  const asset = assetName();
+  if (!asset) {
+    console.error(
+      `grounded: unsupported platform ${process.platform}/${process.arch}. ` +
+      `Standalone binaries ship for darwin/arm64, darwin/amd64, linux/amd64, ` +
+      `windows/amd64; other platforms should use pip (pip install grounded-lint).`
+    );
+    process.exitCode = 2;
+    return;
+  }
+  const bin = path.join(__dirname, asset);
+  if (!fs.existsSync(bin)) {
+    console.error(
+      `grounded: binary missing (${asset}). Reinstall the package ` +
+      `(the postinstall download may have failed).`
+    );
+    process.exitCode = 2;
+    return;
+  }
+  const child = spawn(bin, process.argv.slice(2), { stdio: "inherit" });
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => {
+      if (!child.kill(sig)) process.exit(128 + (sig === "SIGINT" ? 2 : 15));
+    });
+  }
+  child.on("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exitCode = code === null ? 2 : code;
+  });
+  child.on("error", (err) => {
+    console.error(`grounded: failed to start binary: ${err.message}`);
+    process.exitCode = 2;
+  });
+}
+
+if (require.main === module) main();
+module.exports = { assetName };

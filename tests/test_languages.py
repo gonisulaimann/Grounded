@@ -110,5 +110,63 @@ class TestC(unittest.TestCase):
         self.assertNotIn("ghost_fn", c_top_level_names("int main() {\n  ghost_fn(1);\n  return 0;\n}\n"))
 
 
+def _has_ts_libs() -> bool:
+    try:
+        import tree_sitter  # noqa: F401
+        import tree_sitter_javascript  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+class TestTreeSitterEnrichment(unittest.TestCase):
+    """Optional tree-sitter union for JS/TS indexing: None without the
+    libraries (CI pins the regex core), declaration + export names with
+    them. Suppression-only in both worlds."""
+
+    def test_returns_none_without_libraries(self):
+        from unittest import mock
+        from grounded import tree_sitter_js
+        with mock.patch.object(tree_sitter_js, "_load", return_value=None):
+            self.assertIsNone(tree_sitter_js.extract_js_defs("const x = 1;", ".js"))
+
+    def test_index_unchanged_without_libraries(self):
+        from unittest import mock
+        from grounded import tree_sitter_js
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.ts").write_text(
+                "export const enum E { A = 1 }\nexport const x = 1;\n",
+                encoding="utf-8")
+            with mock.patch.object(tree_sitter_js, "_load", return_value=None):
+                _, _, index = scan_root(root, Config())
+            self.assertIn("x", index.file_exports.get("a.ts", set()))
+
+    @unittest.skipUnless(_has_ts_libs(), "tree-sitter grammars not installed")
+    def test_exotic_declarations_recorded(self):
+        from grounded import tree_sitter_js
+        out = tree_sitter_js.extract_js_defs(
+            "export const enum E { A = 1 }\n"
+            "export namespace N { export const x = 1; }\n"
+            "export abstract class C {}\n"
+            "const top_plain = 5;\n"
+            "export default function main() {}\n", ".ts")
+        self.assertEqual(out["symbols"] & {"E", "N", "C", "main"}, {"E", "N", "C", "main"})
+        self.assertIn("E", out["exports"])
+        self.assertTrue(out["has_default"])
+        self.assertNotIn("top_plain", out["symbols"])
+        self.assertNotIn("x", out["symbols"])
+
+    @unittest.skipUnless(_has_ts_libs(), "tree-sitter grammars not installed")
+    def test_malformed_input_never_crashes_index(self):
+        from grounded.repo_index import RepoIndex
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.js").write_text("function broken( {\nconst = = =\n",
+                                       encoding="utf-8")
+            _, _, index = scan_root(root, Config())
+            self.assertIn("a.js", index.rel_paths)
+
+
 if __name__ == "__main__":
     unittest.main()

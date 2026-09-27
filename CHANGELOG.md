@@ -8,6 +8,33 @@ All notable changes to `grounded` are documented here. Format follows
 ### Added
 - **`scan --cross-index DIR`**: two-root API verification for
   `stale-api-ref` (the flag itself is the pairing evidence).
+- **`slop-package`** (opt-in): the AI package-hallucination firewall.
+  Third-party imports naming distributions missing from PyPI/npm
+  report as lies (the name is claimable by attackers); distributions
+  younger than 48 hours report as drift. The one network checker:
+  offline means silence, default scans stay offline and deterministic.
+- **`grounded pr`**: applies unambiguous fixes on a timestamped branch
+  and opens a pull request (via `gh`) with an evidence-per-line body.
+  Refuses dirty trees, reports honestly when push or PR creation
+  fails. `--dry-run` previews plan and body.
+- **`grounded generate-agent-rules`**: writes an `AGENTS.md` containing
+  only verified paths (checked to exist) and commands (read from real
+  manifests). Refuses to overwrite without `--force`.
+- **`grounded badge`**: prints a Reference Integrity shields badge;
+  `--check` gates it on a clean README (doc-example + fence lies fail).
+- **Tree-sitter enrichment (optional):** when `tree_sitter` plus a JS/TS
+  grammar is installed, the index unions declaration and export names
+  the regexes cannot see (ambient `const enum`, namespaces, abstract
+  classes, specifier aliases). stdlib-only core untouched; CI pins the
+  canonical regex results; suppression-only direction.
+- **npm wrapper** (`npm/`): esbuild-style `postinstall` fetching the
+  version-matched standalone binary (`@gonisulaimann/grounded`; the
+  bare name is squatted). Shim forwards stdio, args, signals, and
+  exit codes with tests.
+- **Action PR comments** (`pr-comment: 'true'`): one maintained PR
+  comment (created once, updated in place, resolved to clean),
+  verified live against a scratch repo. Needs
+  `permissions: pull-requests: write`.
 - Doc-example bindings: comprehension targets, trailing-comment
   prose, and the `cls` convention stay silent.
 - `check_text` query leniency: function parameters answer as known

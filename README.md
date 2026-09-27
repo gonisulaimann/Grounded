@@ -278,7 +278,10 @@ command. For a VS Code task instead, see the
 ```
 
 The Action annotates the pull request inline and writes a findings table
-to the job summary. For whole-tree gating, record a baseline instead
+to the job summary. With `pr-comment: 'true'` it maintains one PR
+comment (created once, updated in place, never a thread) — requires
+`permissions: pull-requests: write` on the calling workflow. For
+whole-tree gating, record a baseline instead
 (`baseline: .grounded-baseline.json`, see below).
 
 ```yaml
@@ -347,7 +350,7 @@ identical either way.
 | `number-drift` | drift (warning) | A comment states a magic number (timeout, port, limit, threshold) that disagrees with adjacent code. |
 | `fragile-anchor` | smell (note) | `line 42` anchors, `see above` / `see below` without a symbol, and workaround markers (`HACK`, `XXX`, `workaround`) with no ticket or expiry condition. |
 
-Six more checkers ship **opt-in** (`--enable <id>`) and graduate to
+Eight more checkers ship **opt-in** (`--enable <id>`) and graduate to
 default-on only by measured precision
 ([tracked here](https://github.com/gonisulaimann/Grounded/tree/main/corpus)):
 
@@ -359,6 +362,8 @@ default-on only by measured precision
 | `phantom-package` | drift | import declared in no manifest |
 | `stale-cli-ref` | lie | a documented `grounded` invocation the live CLI parser rejects |
 | `stale-cli-flag` | lie | a documented invocation of the repo's own CLI with a long flag no argparse, click, cobra, commander or Go `flag` definition declares |
+| `stale-api-ref` | lie | an HTTP-call literal with no route in the repo's own JSON OpenAPI/Swagger docs |
+| `slop-package` | lie / drift | an import naming a distribution missing from (or newborn on) the public registry |
 
 ## Configuration
 

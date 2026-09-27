@@ -31,6 +31,9 @@ inputs:
   summary:
     description: Write a Markdown findings table to the job summary ('true' or 'false')
     default: 'true'
+  pr-comment:
+    description: Maintain one PR comment with the findings table (pull_request events only, 'true' or 'false')
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -66,6 +69,43 @@ runs:
 
         if [ "${{ inputs.summary }}" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
           grounded scan "${ARGS[@]}" --format markdown >> "$GITHUB_STEP_SUMMARY" || true
+        fi
+
+        if [ "${{ inputs['pr-comment'] }}" = "true" ] && [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+          # Needs `permissions: pull-requests: write` on the calling workflow,
+          # plus python3 and gh (both preinstalled on GitHub runners).
+          REPORT="$(mktemp)"
+          COUNT="$(grounded scan "${ARGS[@]}" --format json 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo SKIP)"
+          if [ "$COUNT" = "SKIP" ]; then
+            # The scan itself broke: say nothing here (the final
+            # `grounded scan` below still fails the job). Posting
+            # "clean" over a broken scan would be a lie.
+            :
+          else
+            {
+              echo "<!-- grounded-report -->"
+              if [ "$COUNT" -gt 0 ] 2>/dev/null; then
+                echo "## Grounded found ${COUNT} dangling reference(s)"
+                echo ""
+                grounded scan "${ARGS[@]}" --format markdown || true
+                echo ""
+                echo "_Reported by [Grounded](https://github.com/gonisulaimann/Grounded) — claim, evidence, and fix on every line._"
+              else
+                echo "## Grounded: clean"
+                echo ""
+                echo "_No dangling references in scope. Previously reported findings are resolved._"
+              fi
+            } > "$REPORT"
+            # One maintained comment, never a thread: update the existing
+            # grounded-report comment if present, else create it.
+            EXISTING="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --paginate -q '.[] | select((.body // "") | contains("<!-- grounded-report -->")) | .id' 2>/dev/null | head -1)"
+            if [ -n "$EXISTING" ]; then
+              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING}" -F "body=@${REPORT}" >/dev/null || true
+            else
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" -F "body=@${REPORT}" >/dev/null || true
+            fi
+          fi
+          rm -f "$REPORT"
         fi
 
         grounded scan "${ARGS[@]}"

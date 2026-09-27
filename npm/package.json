@@ -1,0 +1,25 @@
+{
+  "name": "@gonisulaimann/grounded",
+  "version": "0.17.0",
+  "description": "Reference integrity firewall: find comments, doc examples, imports, and config strings that contradict the repository they live in.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gonisulaimann/Grounded.git"
+  },
+  "homepage": "https://github.com/gonisulaimann/Grounded#readme",
+  "bin": {
+    "grounded": "bin/grounded"
+  },
+  "files": [
+    "bin/grounded",
+    "install.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

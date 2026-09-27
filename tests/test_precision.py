@@ -273,5 +273,87 @@ class TestDocExampleBindings(unittest.TestCase):
         self.assertIn("frobnicate", out)
 
 
+class TestSlopPackage(unittest.TestCase):
+    """slop-package: hallucinated imports vs the public registries.
+
+    The registry is monkeypatched: network never runs in the suite.
+    Live lookups were verified by hand against PyPI/npm (missing 404s,
+    real packages resolve with ages)."""
+
+    FAKE = {
+        ("pypi", "crypto-fast-auth"): {"exists": False, "age_hours": None},
+        ("pypi", "requests"): {"exists": True, "age_hours": 80000.0},
+        ("pypi", "fresh-bait"): {"exists": True, "age_hours": 3.0},
+        ("npm", "nope-not-real"): {"exists": False, "age_hours": None},
+        ("npm", "react"): {"exists": True, "age_hours": 90000.0},
+    }
+
+    def _slop(self, files, lang="python"):
+        from unittest import mock
+        from grounded.checkers.slop import check_slop_package
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for rel, text in files.items():
+                p = root / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text, encoding="utf-8")
+            _, facts, index = scan_root(root, Config())
+            target = next(f for f in facts if f.language == lang)
+            with mock.patch("grounded.checkers.slop.registry_lookup",
+                            side_effect=lambda k, d: self.FAKE.get((k, d))):
+                return check_slop_package(target, index)
+
+    def test_missing_py_is_lie(self):
+        out = self._slop({"a.py": "from crypto_fast_auth import hash_token\n"})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].checker, "slop-package")
+        self.assertEqual(out[0].severity, "lie")
+        self.assertIn("crypto-fast-auth", out[0].title)
+
+    def test_newborn_is_drift(self):
+        out = self._slop({"a.py": "import fresh_bait\n"})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].severity, "drift")
+        self.assertIn("hours ago", out[0].title)
+
+    def test_real_old_silent(self):
+        out = self._slop({"a.py": "import requests\n"})
+        self.assertEqual(out, [])
+
+    def test_missing_js_is_lie(self):
+        out = self._slop({"a.js": "import x from 'nope-not-real';\nconsole.log(x);\n"},
+                         lang="javascript")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].severity, "lie")
+
+    def test_offline_is_silent(self):
+        from unittest import mock
+        from grounded.checkers.slop import check_slop_package
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.py").write_text("from crypto_fast_auth import x\n",
+                                       encoding="utf-8")
+            _, facts, index = scan_root(root, Config())
+            with mock.patch("grounded.checkers.slop.registry_lookup",
+                            return_value=None):
+                self.assertEqual(check_slop_package(facts[0], index), [])
+
+    def test_stdlib_and_firstparty_silent(self):
+        from unittest import mock
+        from grounded.checkers.slop import check_slop_package, registry_lookup
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "pkg").mkdir()
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "core.py").write_text("X = 1\n", encoding="utf-8")
+            (root / "a.py").write_text("import os\nfrom pkg.core import X\n",
+                                       encoding="utf-8")
+            _, facts, index = scan_root(root, Config())
+            with mock.patch("grounded.checkers.slop.registry_lookup") as m:
+                out = check_slop_package(facts[0], index)
+                self.assertEqual(out, [])
+                m.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
