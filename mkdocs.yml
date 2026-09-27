@@ -53,5 +53,6 @@ nav:
   - Architecture: internals.md
   - Benchmarks: benchmarks.md
   - Registry Grid: registry.md
+  - Cross-repo design: cross-repo.md
   - Roadmap: roadmap.md
   - FAQ: faq.md

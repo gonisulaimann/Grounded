@@ -98,5 +98,59 @@ class TestPrecisionRound(unittest.TestCase):
             self.assertFalse(_dunder_typo_of(name, _Idx()), name)
 
 
+class TestStaleApiRef(unittest.TestCase):
+    """stale-api-ref: client literals vs the repo's own JSON OpenAPI spec.
+
+    Narrow by construction: no spec means silence, bare strings are
+    never requests, templates match segment-wise, and filesystem or
+    asset paths stay out."""
+
+    SPEC = ('{"openapi": "3.0.0", "info": {"title": "t", "version": "1"}, '
+            '"paths": {"/users/{id}": {"get": {}}, "/health": {"get": {}}}}')
+
+    def _tree(self, root: Path, client: str, spec: str | None = SPEC) -> None:
+        if spec is not None:
+            (root / "openapi.json").write_text(spec, encoding="utf-8")
+        (root / "app.py").write_text(client, encoding="utf-8")
+
+    def _api(self, files: dict[str, str]):
+        from grounded.checkers.api import check_stale_api_ref
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            spec = files.pop("openapi.json", None)
+            self._tree(root, files["app.py"], spec)
+            _, facts, index = scan_root(root, Config())
+            facts_by_path = {f.path: f for f in facts}
+            return check_stale_api_ref(facts_by_path["app.py"], index)
+
+    def test_missing_route_fires(self):
+        out = self._api({"openapi.json": self.SPEC,
+                         "app.py": 'import requests\nrequests.get("/v2/gone")\n'})
+        self.assertEqual(len(out), 1)
+        self.assertIn("GET /v2/gone", out[0].title)
+        self.assertEqual(out[0].severity, "lie")
+
+    def test_template_and_absolute_url_silent(self):
+        out = self._api({"openapi.json": self.SPEC,
+                         "app.py": ('import requests\nrequests.get("/users/42")\n'
+                                    'requests.get("https://api.x.com/health?x=1")\n')})
+        self.assertEqual(out, [])
+
+    def test_no_spec_silent(self):
+        out = self._api({"app.py": 'import requests\nrequests.get("/v2/gone")\n'})
+        self.assertEqual(out, [])
+
+    def test_non_spec_json_ignored(self):
+        out = self._api({"openapi.json": '{"name": "pkg", "paths": {}}',
+                         "app.py": 'import requests\nrequests.get("/v2/gone")\n'})
+        self.assertEqual(out, [])
+
+    def test_filesystem_and_comment_strings_silent(self):
+        out = self._api({"openapi.json": self.SPEC,
+                         "app.py": ('import requests\np = "/etc/hosts"\n'
+                                    '# see "/old/docs"\nrequests.get("/health")\n')})
+        self.assertEqual(out, [])
+
+
 if __name__ == "__main__":
     unittest.main()

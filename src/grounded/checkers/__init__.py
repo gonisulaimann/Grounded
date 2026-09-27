@@ -171,6 +171,9 @@ from .entrypoints import (  # noqa: F401
     _entry_toml,
     check_stale_entrypoint,
 )
+from .api import (  # noqa: F401
+    check_stale_api_ref,
+)
 from .mocks import (  # noqa: F401
     _IMPORT_AS,
     _MOCK_PATCH_OBJECT,
@@ -218,6 +221,7 @@ CHECKERS = {
     "phantom-package": check_phantom_package,
     "stale-cli-ref": check_stale_cli_ref,
     "stale-cli-flag": check_stale_cli_flag,
+    "stale-api-ref": check_stale_api_ref,
 }
 
 CHECKER_DESCRIPTIONS = {
@@ -234,6 +238,7 @@ CHECKER_DESCRIPTIONS = {
     "stale-mock-ref": "@patch/patch.object strings naming symbols absent from the in-repo module (graduated 2026-09-22; re-verified with the checker-error count at 0 — 0 false positives over 15,196 files in svelte/OmniRoute/flask/requests, so the checker demonstrably ran).",
     "phantom-package": "EXPERIMENTAL, opt-in only: imports declared in no manifest (pyproject, requirements, package.json).",
     "stale-cli-ref": "EXPERIMENTAL, opt-in only: documented `grounded` invocations with unknown subcommands or flags.",
+    "stale-api-ref": "EXPERIMENTAL, opt-in only: client calls an HTTP path no OpenAPI/Swagger document in the repo defines.",
     "unclosed-fence": "a Markdown code fence that never closes, or a fence the renderer swallows because an earlier block is still open (both make content render as code and invert the doc checkers' fence state). Graduated 2026-09-22; re-verified with the checker-error count at 0 — 0 false positives over 11,564 Markdown files in eight real repos, and the walk pinned by a differential fuzz against an independent CommonMark reference, so the checker demonstrably ran.",
 }
 
@@ -243,7 +248,8 @@ CHECKER_DESCRIPTIONS = {
 # can prove the checker ran — a checker that raises also returns no findings
 # — so graduation requires a checker-error count of 0 (exit code 3).
 OPT_IN_CHECKERS = frozenset({"stale-doc-ref", "stale-contract-ref", "ghost-export",
-                             "phantom-package", "stale-cli-ref", "stale-cli-flag"})
+                             "phantom-package", "stale-cli-ref", "stale-cli-flag",
+                             "stale-api-ref"})
 DEFAULT_ENABLED = frozenset(CHECKERS) - OPT_IN_CHECKERS
 
 # Intentionally unimplemented: docstring contracts and commented-out code

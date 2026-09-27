@@ -7,6 +7,12 @@ All notable changes to `grounded` are documented here. Format follows
 
 ## [0.17.0] - 2026-09-27
 
+### Added
+- **`stale-api-ref`** (opt-in): HTTP-call string literals verified
+  against the repo's own JSON OpenAPI/Swagger documents, templates
+  matched segment-wise. The cross-repo contract problem in miniature;
+  design for the two-root mode in `docs/cross-repo.md`.
+
 ### Changed
 - **`--changed` reports what the change introduced, not every finding that
   shares a word with it.** The old rule kept any finding, anywhere, whose

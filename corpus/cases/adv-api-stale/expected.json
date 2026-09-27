@@ -1,0 +1,1 @@
+{"enable": ["stale-api-ref"], "expect": [{"checker": "stale-api-ref", "path": "app.py", "line": 4, "contains": "POST /v2/gone"}]}
