@@ -20,6 +20,9 @@ grounded init-agent [--claude|--cursor|--aider] [--skill] [--skill-project]
                [--pre-commit] [--force] [--dry-run]
 grounded mcp [--root .]
 grounded lsp
+grounded doctor [--json]
+grounded watch [PATH] [--interval SECONDS] [--enable ID,...] [--disable ID,...]
+grounded hook claude-code [--fail-on lie|drift|smell]
 ```
 
 Contracts:
@@ -37,3 +40,8 @@ Contracts:
 * `init-agent --skill` installs this skill to `~/.claude/skills/grounded`
   (all projects); `--skill-project` installs to `.claude/skills/grounded`
   (this repo only). Bare `init-agent` never writes outside the repo.
+* `watch` reports only findings introduced since the previous scan
+  (exit 0 always: monitors report, they don't gate). `doctor` checks
+  installation and agent-wiring health (exit 1 is diagnostic).
+* MCP adds `check_text`: resolve names/paths in free text to
+  known/unknown before acting. Query first; fix after.
