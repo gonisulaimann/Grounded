@@ -830,6 +830,14 @@ class TestPr(unittest.TestCase):
         subprocess.run(["git", *args], cwd=root, check=True,
                        capture_output=True, env=env, timeout=60)
 
+    def _git_env(self) -> dict:
+        import os
+        from unittest import mock
+        return mock.patch.dict(os.environ,
+                               {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                                "GIT_COMMITTER_NAME": "t",
+                                "GIT_COMMITTER_EMAIL": "t@t"}, clear=False)
+
     def _fixable(self, root: Path) -> None:
         self._write(root, {
             "src/real/deep.py": "X = 1\n",
@@ -903,6 +911,7 @@ class TestPr(unittest.TestCase):
             buf = io.StringIO()
             err = io.StringIO()
             with mock.patch.dict(os.environ, env, clear=False), \
+                    self._git_env(), \
                     contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
                 rc = main(["pr", str(root), "--title", "fix test"])
             # push to the invalid remote fails: the fix lands on a local
@@ -954,6 +963,7 @@ class TestPr(unittest.TestCase):
                        GH_LOG=str(log))
             buf = io.StringIO()
             with mock.patch.dict(os.environ, env, clear=False), \
+                    self._git_env(), \
                     contextlib.redirect_stdout(buf):
                 rc = main(["pr", str(root), "--title", "fix test"])
             self.assertEqual(rc, 0)
