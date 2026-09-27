@@ -98,14 +98,14 @@ grounded: 1 finding(s) in 842 file(s), 1 lie(s), 0 drift(s), 0 smell(s).
 
 | Feature | Description |
 | :--- | :--- |
-| ⚡ **Sub-Millisecond Recheck** | **0.6 ms** per-file in-process recheck. Scans a 3,000-file repository in under 2 seconds. |
-| 🛡️ **Zero Dependencies** | **100% Python standard library**. No external runtime packages, no background daemon weight, no telemetry. |
-| 🤖 **Native AI Agent Firewall** | Intercepts Claude Code, Cursor, and Aider post-edit hooks pre-commit to catch hallucinations live. |
-| 🌐 **Polyglot Parsing** | Built-in AST and lexical indexers for **Python, TypeScript, JavaScript, Go, and C**. |
-| 🚨 **Slopsquatting Defense** | Flags imports of non-existent packages before attackers register malware on PyPI/npm. |
-| 🌲 **Tree-Sitter Enriched** | High-precision AST extraction for ambient type declarations, TS path aliases, and monorepos. |
-| 🔌 **LSP & MCP Servers** | Native **LSP 3.17** server for real-time IDE squigglies + **stdio MCP** server for agent tool-calling. |
-| 🛠️ **Self-Healing PRs** | Run `grounded pr` to automatically rewrite unambiguous stale references and open a GitHub PR. |
+| **Sub-Millisecond Recheck** | **0.6 ms** per-file in-process recheck. Scans a 3,000-file repository in under 2 seconds. |
+| **Zero Dependencies** | **100% Python standard library**. No external runtime packages, no background daemon weight, no telemetry. |
+| **Native AI Agent Firewall** | Intercepts Claude Code, Cursor, and Aider post-edit hooks pre-commit to catch hallucinations live. |
+| **Polyglot Parsing** | Built-in AST and lexical indexers for **Python, TypeScript, JavaScript, Go, and C**. |
+| **Slopsquatting Defense** | Flags imports of non-existent packages before attackers register malware on PyPI/npm. |
+| **Tree-Sitter Enriched** | High-precision AST extraction for ambient type declarations, TS path aliases, and monorepos. |
+| **LSP & MCP Servers** | Native **LSP 3.17** server for real-time IDE squigglies + **stdio MCP** server for agent tool-calling. |
+| **Self-Healing PRs** | Run `grounded pr` to automatically rewrite unambiguous stale references and open a GitHub PR. |
 
 ---
 
