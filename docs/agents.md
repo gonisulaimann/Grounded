@@ -37,6 +37,14 @@ model. Earlier versions installed `grounded scan . --changed --quiet`,
 whose exit `1` only reached the human; re-run `grounded init-agent
 --claude` to upgrade it in place.
 
+For plans and renames, query before acting: the MCP `check_text` tool
+resolves the names and paths in free text ("rename to `fetch_user()`
+per `docs/auth.md`") against the repo and reports known/unknown per
+claim with evidence. A PreToolUse recipe: call `check_text` on the
+plan's load-bearing names before editing; if anything comes back
+unknown, re-read the evidence before writing code. Querying first is
+cheaper than fixing after — the finding you never write needs no gate.
+
 ## Cursor
 
 `.cursor/rules/grounded.mdc` (agent-requested mode: description, no globs).
@@ -64,10 +72,12 @@ aider --lint-cmd "sh -c 'for f; do grounded scan \"$f\" --quiet || exit 1; done'
 
 ## MCP server
 
-`grounded mcp` serves stdio JSON-RPC for coding agents. Three tools:
+`grounded mcp` serves stdio JSON-RPC for coding agents. Four tools:
 `check_path` (scan a path under the server root; paths cannot escape it),
-`explain_checker`, and `blast_radius` (definers, importers, and claims
-across comments, docs, mocks, and entry points: ask before renaming).
+`explain_checker`, `blast_radius` (definers, importers, and claims
+across comments, docs, mocks, and entry points: ask before renaming),
+and `check_text` (resolve the names/paths in free text to known/unknown
+with evidence: ask before acting).
 Both scan tools honor the
 `grounded.toml` in the scanned root (same results as the CLI).
 

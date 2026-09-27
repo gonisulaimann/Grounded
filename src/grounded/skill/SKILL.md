@@ -18,7 +18,7 @@ resolve: symbols, imports, file paths, magic numbers. It never guesses.
 ## How to verify
 
 Prefer the MCP tools when available (`check_path` on edited files,
-`blast_radius` before renames). Without MCP, shell out:
+`blast_radius` before renames, `check_text` on plans before acting). Without MCP, shell out:
 
 ```console
 grounded scan <file> --quiet          # exit 1 on findings, 0 when clean, 3 if a checker raised

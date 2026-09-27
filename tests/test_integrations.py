@@ -146,7 +146,7 @@ class TestMcp(unittest.TestCase):
             self._handshake(server)
             tools = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
             names = {t["name"] for t in tools["result"]["tools"]}
-            self.assertEqual(names, {"check_path", "explain_checker", "blast_radius"})
+            self.assertEqual(names, {"check_path", "explain_checker", "blast_radius", "check_text"})
             resp = server.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                   "params": {"name": "check_path", "arguments": {"path": "."}}})
             payload = json.loads(resp["result"]["content"][0]["text"])
@@ -182,6 +182,34 @@ class TestMcp(unittest.TestCase):
                                   "params": {"name": "check_path", "arguments": {"path": ".."}}})
             self.assertEqual(resp["error"]["code"], -32602)
 
+    def test_check_text_resolves_claims(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "pkg").mkdir()
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "core.py").write_text(
+                "def get_account(uid):\n    return uid\n", encoding="utf-8")
+            server = self._server(root)
+            self._handshake(server)
+            resp = server.handle({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                                  "params": {"name": "check_text",
+                                             "arguments": {
+                                                 "path": ".",
+                                                 "text": ("rename to `get_account()` per "
+                                                          "pkg/core.py; drop `ghost_fn()`; "
+                                                          "see pkg/gone.py") }}})
+            payload = json.loads(resp["result"]["content"][0]["text"])
+            by_claim = {c["claim"]: c["verdict"] for c in payload["claims"]}
+            self.assertEqual(by_claim["`get_account()`"], "known")
+            self.assertEqual(by_claim["`ghost_fn()`"], "unknown")
+            self.assertEqual(by_claim["pkg/core.py"], "known")
+            self.assertEqual(by_claim["pkg/gone.py"], "unknown")
+            self.assertEqual(payload["unknown"], 2)
+            bad = server.handle({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                                 "params": {"name": "check_text",
+                                            "arguments": {"path": ".", "text": "  "}}})
+            self.assertEqual(bad["error"]["code"], -32602)
+
     def test_stdio_transport_roundtrip(self):
         import os
         import subprocess
@@ -205,7 +233,8 @@ class TestMcp(unittest.TestCase):
             lines = [json.loads(ln) for ln in proc.stdout.splitlines() if ln.strip()]
             self.assertEqual(lines[0]["result"]["serverInfo"]["name"], "grounded")
             self.assertEqual({t["name"] for t in lines[1]["result"]["tools"]},
-                             {"check_path", "explain_checker", "blast_radius"})
+                             {"check_path", "explain_checker", "blast_radius",
+                              "check_text"})
             self.assertNotIn("Traceback", proc.stderr)
 
 
@@ -812,6 +841,44 @@ class TestClaudeCodeHook(unittest.TestCase):
             self.assertEqual(len(post), 1)
             self.assertEqual(post[0]["hooks"][0]["command"], "grounded hook claude-code")
             self.assertEqual(post[0]["matcher"], "Edit|Write|MultiEdit")
+
+
+class TestCheckText(unittest.TestCase):
+    def _index(self, root: Path):
+        (root / "pkg").mkdir()
+        (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "pkg" / "core.py").write_text(
+            "def get_account(uid):\n    return uid\n", encoding="utf-8")
+        _, _, index = scan_root(root, Config())
+        return index
+
+    def test_known_and_unknown(self):
+        from grounded.checkers.query import check_text_claims
+        with tempfile.TemporaryDirectory() as td:
+            index = self._index(Path(td))
+            out = {c["claim"]: c["verdict"] for c in check_text_claims(
+                "Call `get_account()` per pkg/core.py; avoid `ghost_fn()`.", index)}
+            self.assertEqual(out["`get_account()`"], "known")
+            self.assertEqual(out["pkg/core.py"], "known")
+            self.assertEqual(out["`ghost_fn()`"], "unknown")
+
+    def test_prose_is_not_claims(self):
+        from grounded.checkers.query import check_text_claims
+        with tempfile.TemporaryDirectory() as td:
+            index = self._index(Path(td))
+            out = check_text_claims(
+                "For example, call foo() or bar() with something.", index)
+            self.assertEqual(out, [])
+
+    def test_unknown_suggests(self):
+        from grounded.checkers.query import check_text_claims
+        with tempfile.TemporaryDirectory() as td:
+            index = self._index(Path(td))
+            out = check_text_claims("Call `get_acount()`.", index)
+            self.assertEqual(len(out), 1)
+            self.assertEqual(out[0]["verdict"], "unknown")
+            self.assertIn("get_account", out[0]["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

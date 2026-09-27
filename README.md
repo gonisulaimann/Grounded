@@ -226,10 +226,11 @@ tests or committing.
 aider --lint-cmd "sh -c 'for f; do grounded scan \"$f\" --quiet || exit 1; done' sh"
 ```
 
-**MCP.** `grounded mcp` serves three tools over stdio: `check_path`
+**MCP.** `grounded mcp` serves four tools over stdio: `check_path`
 (scan a path under the server root, which paths cannot escape),
-`explain_checker`, and `blast_radius` (definers, importers and comment
-claims for a symbol: ask before renaming). Protocol versions
+`explain_checker`, `blast_radius` (definers, importers and comment
+claims for a symbol: ask before renaming), and `check_text` (resolve
+the names/paths in free text to known/unknown: ask before acting). Protocol versions
 `2024-11-05` through `2025-06-18`; stdout carries only MCP messages.
 
 ```json

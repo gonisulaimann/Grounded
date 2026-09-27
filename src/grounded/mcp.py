@@ -65,6 +65,25 @@ def _tool_defs() -> list[dict]:
                 "required": ["symbol"],
             },
         },
+        {
+            "name": "check_text",
+            "description": ("Ask the repository whether names or paths stated "
+                            "in free text (a plan, a doc paragraph, a rename "
+                            "proposal) are real: each code-shaped claim comes "
+                            "back known or unknown with evidence. Query "
+                            "before acting, not after. Never a verdict about "
+                            "a file; use check_path for that."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string",
+                             "description": "The prose to check, e.g. 'rename to fetch_user() per docs/src/auth.md'"},
+                    "path": {"type": "string",
+                             "description": "Directory to resolve against, relative to the server root"},
+                },
+                "required": ["text"],
+            },
+        },
     ]
 
 
@@ -144,6 +163,8 @@ class McpServer:
             return self._check_path(req_id, args)
         if name == "blast_radius":
             return self._blast_radius(req_id, args)
+        if name == "check_text":
+            return self._check_text(req_id, args)
         if name == "explain_checker":
             return self._explain(req_id, args)
         return _error(req_id, -32602, f"unknown tool: {name}")
@@ -219,6 +240,34 @@ class McpServer:
                                        path=_resp_path(f.path)) for f in findings],
                 }),
             }],
+            "isError": False,
+        })
+
+    def _check_text(self, req_id, args: dict):
+        from .checkers.query import check_text_claims
+        from .config import Config
+        from .scanner import project_root_for, scan_root
+        try:
+            target = self._resolve(str(args.get("path", ".")))
+        except ValueError as exc:
+            return _error(req_id, -32602, str(exc))
+        if not target.exists():
+            return _error(req_id, -32602, f"path does not exist: {args.get('path')}")
+        text = str(args.get("text", ""))
+        if not text.strip():
+            return _error(req_id, -32602, "text is required")
+        # Recall direction, like blast_radius: unknown must mean absent
+        # from the project, not absent from a partial snapshot.
+        base = target if target.is_dir() else target.parent
+        root = project_root_for(base, stop=self.root)
+        _, _, index = scan_root(root, Config.load(root))
+        claims = check_text_claims(text, index)
+        unknown = sum(1 for c in claims if c["verdict"] == "unknown")
+        return _ok(req_id, {
+            "content": [{"type": "text", "text": json.dumps({
+                "claims": claims,
+                "unknown": unknown,
+            })}],
             "isError": False,
         })
 
