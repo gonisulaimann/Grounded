@@ -697,5 +697,76 @@ class TestBaselineIntegrity(unittest.TestCase):
             self.assertEqual(len(load_baseline(path)), 1)
 
 
+class TestDoctor(unittest.TestCase):
+    def _home_with(self, settings=None, skill=False):
+        from unittest import mock
+        td = tempfile.TemporaryDirectory()
+        home = Path(td.name)
+        if settings is not None:
+            d = home / ".claude"
+            d.mkdir(parents=True)
+            (d / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+        if skill:
+            d = home / ".claude" / "skills" / "grounded"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text("# skill", encoding="utf-8")
+        self.addCleanup(td.cleanup)
+        return mock.patch("grounded.cli._home", return_value=home)
+
+    def _run(self, argv):
+        import contextlib
+        import io
+        from grounded.cli import main
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(argv)
+        return rc, buf.getvalue()
+
+    def test_healthy_home(self):
+        from unittest import mock
+        from grounded import __version__
+        settings = {"hooks": {"PostToolUse": [
+            {"matcher": "Edit|Write|MultiEdit",
+             "hooks": [{"type": "command",
+                        "command": "grounded hook claude-code"}]}]}}
+        with self._home_with(settings, skill=True), \
+                mock.patch("grounded.cli._pypi_latest",
+                           return_value=__import__("grounded").__version__), \
+                mock.patch("grounded.cli._mcp_probe",
+                           return_value=("ok", "MCP server answers")):
+            rc, out = self._run(["doctor"])
+            self.assertEqual(rc, 0)
+            self.assertIn("healthy", out)
+            rc, out = self._run(["doctor", "--json"])
+            self.assertEqual(rc, 0)
+            rows = json.loads(out)
+            self.assertTrue(all({"status", "detail"} <= set(r) for r in rows))
+
+    def test_legacy_hook_is_stale(self):
+        from unittest import mock
+        settings = {"hooks": {"PostToolUse": [
+            {"matcher": "Edit|Write",
+             "hooks": [{"type": "command",
+                        "command": "grounded scan . --changed --quiet"}]}]}}
+        with self._home_with(settings), \
+                mock.patch("grounded.cli._pypi_latest", return_value=None), \
+                mock.patch("grounded.cli._mcp_probe",
+                           return_value=("ok", "MCP server answers")):
+            rc, out = self._run(["doctor"])
+            self.assertEqual(rc, 1)
+            self.assertIn("[stale]", out)
+            self.assertIn("init-agent --claude", out)
+
+    def test_missing_hook(self):
+        from unittest import mock
+        with self._home_with(None), \
+                mock.patch("grounded.cli._pypi_latest", return_value=None), \
+                mock.patch("grounded.cli._mcp_probe",
+                           return_value=("ok", "MCP server answers")):
+            rc, out = self._run(["doctor"])
+            self.assertEqual(rc, 1)
+            self.assertIn("[missing]", out)
+
+
 if __name__ == "__main__":
     unittest.main()

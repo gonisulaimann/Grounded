@@ -270,7 +270,7 @@ command. For a VS Code task instead, see the
 ## CI, pre-commit, and GitHub Action
 
 ```yaml
-- uses: gonisulaimann/Grounded@v0.16.0
+- uses: gonisulaimann/Grounded@v0.17.0
   with:
     changed-base: origin/main   # what this pull request broke
     fail-on: lie
@@ -283,7 +283,7 @@ to the job summary. For whole-tree gating, record a baseline instead
 ```yaml
 repos:
   - repo: https://github.com/gonisulaimann/Grounded
-    rev: v0.16.0
+    rev: v0.17.0
     hooks:
       - id: grounded          # dangling references in your changes
       - id: grounded-fences   # Markdown fences the renderer will not honour

@@ -74,7 +74,7 @@ grounded explain stale-symbol-ref
 ```yaml
 repos:
   - repo: https://github.com/gonisulaimann/Grounded
-    rev: v0.16.0
+    rev: v0.17.0
     hooks:
       - id: grounded
 ```

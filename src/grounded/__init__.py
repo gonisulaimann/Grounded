@@ -9,5 +9,5 @@ if sys.version_info < (3, 10):  # pragma: no cover
         "Please upgrade Python or run via uvx: uvx --from grounded-lint grounded"
     )
 
-__version__ = "0.16.0"
+__version__ = "0.17.0"
 __all__ = ["__version__"]

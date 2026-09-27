@@ -5,6 +5,8 @@ All notable changes to `grounded` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-27
+
 ### Changed
 - **`--changed` reports what the change introduced, not every finding that
   shares a word with it.** The old rule kept any finding, anywhere, whose
@@ -33,6 +35,13 @@ All notable changes to `grounded` are documented here. Format follows
   the new one reports 0.
 
 ### Added
+- **`grounded doctor`**: installation and agent-wiring health in one
+  command. Compares the engine against PyPI latest (fail-open offline),
+  verifies the hook adapter exists, audits `~/.claude/settings.json`
+  for the legacy exit-1 hook (findings reach you, never the model),
+  checks the agent skill, and handshakes the MCP server. Exits 1 with
+  actionable fixes when anything is stale — born from a real 0.11.0
+  install silently running five versions behind.
 - **Persistent index cache** in the git directory (`.git/grounded/`): each
   file's index contribution is stored by (mtime, size) and replayed, so a
   scan re-indexes only what changed (cpython index build 2.25 s -> 0.14 s

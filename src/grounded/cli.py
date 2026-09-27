@@ -120,7 +120,56 @@ def build_parser() -> argparse.ArgumentParser:
     l = sub.add_parser("list", help="list files that would be scanned")
     l.add_argument("path", nargs="?", default=".")
     l.add_argument("--config", default=None)
+
+    d = sub.add_parser("doctor", help="check the installation and agent wiring for staleness")
+    d.add_argument("--json", action="store_true", help="machine-readable report")
     return p
+
+
+def _home() -> Path:
+    """Home directory, factored for tests (never writes here)."""
+    return Path.home()
+
+
+def _pypi_latest(timeout: float = 15.0) -> str | None:
+    """Latest grounded-lint on PyPI, or None when offline. Fail-open:
+    a version check must never fail a gate."""
+    import json as _json
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                "https://pypi.org/pypi/grounded-lint/json",
+                timeout=timeout) as r:
+            return str(_json.load(r)["info"]["version"])
+    except Exception:
+        return None
+
+
+def _hook_wiring(home: Path) -> list[tuple[str, str]]:
+    """(status, detail) for the Claude Code hook: current, legacy
+    (exit-1, invisible to the model), or missing. Read-only."""
+    import json as _json
+    cfg = home / ".claude" / "settings.json"
+    if not cfg.exists():
+        return [("missing", f"no {cfg} (run: grounded init-agent --claude)")]
+    try:
+        data = _json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [("warn", f"{cfg} unreadable")]
+    out: list[tuple[str, str]] = []
+    post = (data.get("hooks") or {}).get("PostToolUse", [])
+    cmds = [h.get("command", "") for e in post if isinstance(e, dict)
+            for h in (e.get("hooks") or []) if isinstance(h, dict)]
+    if not any("grounded" in c for c in cmds):
+        out.append(("missing", "no grounded hook in PostToolUse"))
+    if any(c.strip() == "grounded hook claude-code" for c in cmds):
+        out.append(("ok", "grounded hook claude-code (exit-2 feedback)"))
+    if any(c.strip() in _CLAUDE_LEGACY_CMDS for c in cmds):
+        out.append(("stale",
+                    "legacy 'grounded scan . --changed --quiet' exits 1: "
+                    "findings reach you, never the model "
+                    "(run: grounded init-agent --claude to upgrade)"))
+    return out or [("warn", "PostToolUse has no grounded entry")]
 
 
 def _resolve_enable_disable(config: Config, enable: str | None, disable: str | None) -> Config:
@@ -651,6 +700,72 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp_probe() -> tuple[str, str]:
+    """MCP handshake over a subprocess (initialize + tools/list).
+    Fail-open: any problem is a warning, never an exception."""
+    import subprocess as _sp
+    try:
+        init = ('{"jsonrpc":"2.0","id":1,"method":"initialize",'
+                '"params":{"protocolVersion":"2025-06-18","capabilities":{},'
+                '"clientInfo":{"name":"grounded-doctor","version":"0"}}}\n')
+        lst = ('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n')
+        proc = _sp.run([sys.executable, "-m", "grounded", "mcp"],
+                       input=init + lst,
+                       capture_output=True, text=True, timeout=25)
+        lines = (proc.stdout or "").splitlines()
+        if any('"tools"' in ln for ln in lines):
+            return ("ok", "MCP server answers (initialize + tools/list)")
+        return ("warn", "MCP server did not answer tools/list")
+    except Exception as exc:
+        return ("warn", f"MCP server probe failed: {exc}")
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Installation + agent-wiring health. Read-only, fail-open on
+    network: a diagnostic must never fail a gate. Exits 0 when healthy,
+    1 when anything needs attention."""
+    import json as _json
+    import subprocess as _sp
+    rows: list[tuple[str, str]] = [("info", f"engine {__version__}")]
+    latest = _pypi_latest()
+    if latest is None:
+        rows.append(("warn", "PyPI unreachable (offline?): latest version unknown"))
+    elif latest == __version__:
+        rows.append(("ok", f"PyPI latest is {latest}: this install is current"))
+    else:
+        rows.append(("warn", f"PyPI latest is {latest}: reinstall to upgrade "
+                             "(pipx upgrade grounded-lint / uv tool upgrade grounded-lint)"))
+    try:
+        sub = [a for a in build_parser()._actions
+               if type(a).__name__ == "_SubParsersAction"]
+        has_hook = "hook" in (sub[0].choices if sub else {})
+    except Exception:
+        has_hook = False
+    rows.append(("ok", "hook adapter present (grounded hook claude-code)")
+                if has_hook else
+                ("stale", "no hook adapter: this binary predates agent feedback "
+                          "(reinstall from a current release)"))
+    rows.extend(_hook_wiring(_home()))
+    skill = _home() / ".claude" / "skills" / "grounded" / "SKILL.md"
+    rows.append(("ok", f"agent skill installed ({skill})") if skill.exists() else
+                ("info", "agent skill not installed "
+                         "(optional: grounded init-agent --skill)"))
+    rows.append(_mcp_probe())
+    bad = any(s in ("warn", "stale", "missing") for s, _ in rows)
+    if args.json:
+        print(_json.dumps([{"status": s, "detail": d} for s, d in rows], indent=2))
+    else:
+        for s, d in rows:
+            print(f"grounded doctor [{s}]: {d}")
+    if bad:
+        print("grounded doctor: issues found above (exit 1 is diagnostic, not a verdict).",
+              file=sys.stderr if args.json else sys.stdout)
+    else:
+        print("grounded doctor: healthy.",
+              file=sys.stderr if args.json else sys.stdout)
+    return 1 if bad else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -682,6 +797,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_explain(args)
     if args.cmd == "list":
         return cmd_list(args)
+    if args.cmd == "doctor":
+        return cmd_doctor(args)
     parser.print_help()
     return 2
 
