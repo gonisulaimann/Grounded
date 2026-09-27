@@ -661,15 +661,21 @@ class TestFenceScanSpec(unittest.TestCase):
                              Path("/tmp/reverify/requests")) if p.is_dir()]
         if not hosts:
             self.skipTest("no real-world corpora checked out")
+        covered: list[str] = []
         for host in hosts:
             docs = sorted(host.rglob("*.md"))[:250]
             if not docs:
-                self.skipTest(f"{host.name} has no markdown (partial checkout)")
+                continue  # partial checkout without markdown: skip the
+                # host, not the test (skipTest here would abort the loop
+                # and hide the remaining corpora).
+            covered.append(host.name)
             for path in docs:
                 text = path.read_text(encoding="utf-8", errors="replace")
                 with self.subTest(host=host.name, doc=str(path)):
                     self.assertEqual(self._walk(text), _reference_scan(text),
                                      f"{path} diverged")
+        if not covered:
+            self.skipTest("no real-world corpora with markdown checked out")
 
 
 class TestRepoDocFences(unittest.TestCase):
