@@ -14,15 +14,14 @@ the repo's own JSON OpenAPI/Swagger documents. Proves the machinery
 
 ## Design: two-root verification
 
-```
-grounded scan ./frontend --cross-index ./backend
-```
+A future pairing flag would scan one root against another's spec
+(frontend clients verified against the backend tree). The shape:
 
-1. Build both indexes (reuse: `scan_root` twice, no new parsing).
-2. Pair by manifest: `frontend/package.json` names the API it consumes
-   (private registry URL, `openapi:` pointer, or explicit
-   `--consumes ./backend/openapi.json`); no pairing evidence means no
-   verdicts — the phantom-package rule applied to roots.
+1. Build both indexes (reuse `scan_root` twice, no new parsing).
+2. Pair by manifest: the client tree's `package.json` names the API it
+   consumes (private registry URL, an `openapi:` pointer, or an
+   explicit consumes-path); no pairing evidence means no verdicts —
+   the phantom-package rule applied to roots.
 3. Run the client side of one index against the spec side of the other,
    both directions where both sides exist.
 4. Findings carry both paths (`frontend/app.js:12` calls what
