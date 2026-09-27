@@ -768,5 +768,52 @@ class TestDoctor(unittest.TestCase):
             self.assertIn("[missing]", out)
 
 
+class TestWatch(unittest.TestCase):
+    def test_start_then_new_finding(self):
+        from grounded.config import Config
+        from grounded.watch import run_watch, snapshot_files
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.py").write_text("X = 1\n", encoding="utf-8")
+            snap = snapshot_files(root, Config())
+            self.assertEqual(list(snap), ["a.py"])
+            events = []
+
+            def on_event(kind, payload, iteration):
+                events.append((kind, len(payload), iteration))
+                if kind == "start":
+                    (root / "a.py").write_text(
+                        "# Calls `ghost_fn_xyz()`.\nX = 1\n", encoding="utf-8")
+
+            rc = run_watch(root, Config(), interval=0, max_iterations=2,
+                           on_event=on_event)
+            self.assertEqual(rc, 0)
+            self.assertEqual([e[0] for e in events], ["start", "new"])
+            self.assertEqual(events[1][1], 1)
+
+    def test_line_shift_is_not_new(self):
+        from grounded.config import Config
+        from grounded.watch import run_watch
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.py").write_text("# Calls `ghost_fn_xyz()`.\nX = 1\n",
+                                       encoding="utf-8")
+            events = []
+
+            def on_event(kind, payload, iteration):
+                events.append((kind, len(payload), iteration))
+                if kind == "start":
+                    (root / "a.py").write_text(
+                        "\n\n# Calls `ghost_fn_xyz()`.\nX = 1\n", encoding="utf-8")
+
+            run_watch(root, Config(), interval=0, max_iterations=2,
+                      on_event=on_event)
+            self.assertEqual([e[0] for e in events], ["start", "clean"])
+
+    def test_cli_watch_bad_path(self):
+        from grounded.cli import main
+        self.assertEqual(main(["watch", "/nonexistent-grounded-dir"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

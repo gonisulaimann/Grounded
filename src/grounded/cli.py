@@ -123,6 +123,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("doctor", help="check the installation and agent wiring for staleness")
     d.add_argument("--json", action="store_true", help="machine-readable report")
+
+    w = sub.add_parser("watch", help="rescan on every change; report only new findings (Prove-It Loop)")
+    w.add_argument("path", nargs="?", default=".", help="directory to watch (default: .)")
+    w.add_argument("--interval", type=float, default=2.0, metavar="SECONDS",
+                   help="poll interval (default: 2.0)")
+    w.add_argument("--config", default=None, help="explicit config file (grounded.toml)")
+    w.add_argument("--enable", default=None, help="comma-separated checker ids to run exclusively")
+    w.add_argument("--disable", default=None, help="comma-separated checker ids to skip")
+    w.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     return p
 
 
@@ -720,6 +729,28 @@ def _mcp_probe() -> tuple[str, str]:
         return ("warn", f"MCP server probe failed: {exc}")
 
 
+def cmd_watch(args: argparse.Namespace) -> int:
+    from .watch import run_watch
+    root = Path(args.path).resolve()
+    if not root.exists():
+        print(f"grounded: path does not exist: {args.path}", file=sys.stderr)
+        return 2
+    if root.is_file():
+        root = root.parent
+    config = _load_config(root, explicit=args.config)
+    try:
+        _resolve_enable_disable(config, args.enable, args.disable)
+    except ConfigError as exc:
+        print(f"grounded: {exc}", file=sys.stderr)
+        return 2
+    try:
+        return run_watch(root, config, interval=args.interval,
+                         use_color=(False if args.no_color else None))
+    except KeyboardInterrupt:
+        print("grounded watch: stopped.", file=sys.stderr)
+        return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Installation + agent-wiring health. Read-only, fail-open on
     network: a diagnostic must never fail a gate. Exits 0 when healthy,
@@ -799,6 +830,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list(args)
     if args.cmd == "doctor":
         return cmd_doctor(args)
+    if args.cmd == "watch":
+        return cmd_watch(args)
     parser.print_help()
     return 2
 
