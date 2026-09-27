@@ -879,6 +879,27 @@ class TestCheckText(unittest.TestCase):
             self.assertEqual(out[0]["verdict"], "unknown")
             self.assertIn("get_account", out[0]["detail"])
 
+    def test_params_tools_and_case(self):
+        from grounded.checkers.query import check_text_claims
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "pkg").mkdir()
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "core.py").write_text(
+                "class Spinner:\n    pass\n\n"
+                "def render(log_locals):\n    return log_locals\n",
+                encoding="utf-8")
+            _, _, index = scan_root(root, Config())
+            out = {c["claim"]: c for c in check_text_claims(
+                "Use `spinner`, `log_locals`, `pip` and `ghost_fn()`.",
+                index, frozenset({"log_locals"}))}
+            self.assertEqual(out["`spinner`"]["verdict"], "known")
+            self.assertIn("case differs", out["`spinner`"]["detail"])
+            self.assertEqual(out["`log_locals`"]["verdict"], "known")
+            self.assertIn("parameter", out["`log_locals`"]["detail"])
+            self.assertNotIn("`pip`", out)
+            self.assertEqual(out["`ghost_fn()`"]["verdict"], "unknown")
+
 
 class TestRegistryPilot(unittest.TestCase):
     def _registry(self):

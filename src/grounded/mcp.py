@@ -260,8 +260,13 @@ class McpServer:
         # from the project, not absent from a partial snapshot.
         base = target if target.is_dir() else target.parent
         root = project_root_for(base, stop=self.root)
-        _, _, index = scan_root(root, Config.load(root))
-        claims = check_text_claims(text, index)
+        _, facts, index = scan_root(root, Config.load(root))
+        params: set[str] = set()
+        for f in facts:
+            for fn in f.functions:
+                for a in fn.args:
+                    params.add(a.lstrip("*"))
+        claims = check_text_claims(text, index, frozenset(params))
         unknown = sum(1 for c in claims if c["verdict"] == "unknown")
         return _ok(req_id, {
             "content": [{"type": "text", "text": json.dumps({

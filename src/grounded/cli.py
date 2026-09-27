@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--changed", nargs="?", const="HEAD", default=None, metavar="BASE",
                    help="report only findings on lines changed vs BASE (default: HEAD, uncommitted work). "
                         "The tree is still fully scanned; reporting is filtered. Errors outside git.")
+    s.add_argument("--cross-index", default=None, metavar="DIR",
+                   help="verify API clients against another tree's specs too: "
+                        "stale-api-ref checks this tree's clients against the union of "
+                        "both trees' OpenAPI/Swagger routes (the flag itself is the "
+                        "pairing evidence). Primary-tree reporting only.")
     s.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     s.add_argument("--quiet", "-q", action="store_true", help="only print findings count + failures")
     s.add_argument("--jobs", type=int, default=None, metavar="N",
@@ -299,6 +304,35 @@ def cmd_scan(args: argparse.Namespace) -> int:
     findings, facts, index = scan_root(root, config, jobs=args.jobs, cache_path=cache_path,
                                        checker_errors=checker_errors, changed=plan,
                                        index_cache=_index_cache_on(args))
+    if args.cross_index is not None:
+        from .checkers.api import check_stale_api_ref, routes_of_index
+        other = Path(args.cross_index)
+        other_root = other if other.is_absolute() else Path.cwd() / other
+        other_root = other_root.resolve()
+        if not other_root.is_dir():
+            print(f"grounded: --cross-index needs a directory: {args.cross_index}",
+                  file=sys.stderr)
+            return 2
+        if "stale-api-ref" not in config.enabled:
+            print("grounded: note: --cross-index only affects stale-api-ref "
+                  "(not enabled); ignoring it.", file=sys.stderr)
+        else:
+            # Index-only scan of the other tree (no checkers run): its
+            # specs join the route set; reporting stays on this tree, so
+            # either maintainer runs their own mirror.
+            _, _, other_index = scan_root(
+                other_root, Config(enabled=set()), checker_errors=checker_errors)
+            found, other_routes = routes_of_index(other_index)
+            if found:
+                scope = (f"this repo's or `{args.cross_index}`'s API specs")
+                cross: list = []
+                for f in facts:
+                    if f.language not in ("python", "javascript"):
+                        continue
+                    cross.extend(check_stale_api_ref(
+                        f, index, extra_routes=other_routes, scope_note=scope))
+                findings = ([f for f in findings if f.checker != "stale-api-ref"]
+                            + cross)
     n_files = len(facts)
     n_unparsed = len(index.parse_failed)
     _report_checker_errors(checker_errors)

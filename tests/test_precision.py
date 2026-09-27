@@ -152,5 +152,126 @@ class TestStaleApiRef(unittest.TestCase):
         self.assertEqual(out, [])
 
 
+class TestCrossIndex(unittest.TestCase):
+    """Two-root verification: --cross-index unions another tree's specs.
+
+    Shipped (not a sketch): the flag itself is the pairing evidence."""
+
+    SPEC = ('{"openapi": "3.0.0", "info": {"title": "t", "version": "1"}, '
+            '"paths": {"/users/{id}": {"get": {}}}}')
+
+    def _roots(self, base: Path) -> tuple[Path, Path]:
+        fe = base / "frontend"
+        be = base / "backend"
+        fe.mkdir()
+        (fe / "app.js").write_text(
+            'import { x } from "./x";\nfetch("/users/42");\nfetch("/v2/gone");\n',
+            encoding="utf-8")
+        (fe / "x.js").write_text("export const x = 1;\n", encoding="utf-8")
+        be.mkdir()
+        (be / "openapi.json").write_text(self.SPEC, encoding="utf-8")
+        return fe, be
+
+    def _scan(self, args):
+        import contextlib
+        import io
+        from grounded.cli import main
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(args)
+        return rc, buf.getvalue()
+
+    def test_cross_index_fires(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            fe, be = self._roots(Path(td))
+            rc, out = self._scan(["scan", str(fe), "--no-color", "--format", "json",
+                                  "--enable", "stale-api-ref",
+                                  "--cross-index", str(be)])
+            self.assertEqual(rc, 1)
+            titles = [f["title"] for f in json.loads(out)]
+            self.assertTrue(any("/v2/gone" in t for t in titles))
+            self.assertFalse(any("/users/42" in t for t in titles))
+
+    def test_without_flag_silent(self):
+        import json
+        with tempfile.TemporaryDirectory() as td:
+            fe, be = self._roots(Path(td))
+            rc, out = self._scan(["scan", str(fe), "--no-color", "--format", "json",
+                                  "--enable", "stale-api-ref"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(json.loads(out), [])
+
+    def test_missing_dir_is_usage_error(self):
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            fe, _ = self._roots(Path(td))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = main(["scan", str(fe), "--cross-index", str(Path(td) / "nope")])
+            self.assertEqual(rc, 2)
+
+    def test_flag_without_checker_is_note(self):
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            fe, be = self._roots(Path(td))
+            err = io.StringIO()
+            out = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                rc = main(["scan", str(fe), "--no-color",
+                           "--cross-index", str(be)])
+            self.assertEqual(rc, 0)
+            self.assertIn("only affects stale-api-ref", err.getvalue())
+
+
+class TestDocExampleBindings(unittest.TestCase):
+    """Doc-example names bound by the example itself: comprehension
+    targets, trailing-comment prose, and the classmethod convention."""
+
+    def _doc(self, readme, enable="stale-doc-ref"):
+        import contextlib
+        import io
+        from grounded.cli import main
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "README.md").write_text(readme, encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = main(["scan", str(root), "--no-color", "--enable", enable])
+            return rc, buf.getvalue()
+
+    def test_comprehension_variable_silent(self):
+        rc, _ = self._doc(
+            "Title\n\n```python\niterator = (x.rstrip() for x in items)\n"
+            "print(iterator)\n```\n")
+        self.assertEqual(rc, 0)
+
+    def test_trailing_comment_prose_silent(self):
+        rc, _ = self._doc(
+            'Title\n\n```python\ndefault_map = {\n'
+            '    "point": "3 4",  # split into ("3", "4") for nargs=2\n'
+            '}\nprint(default_map)\n```\n')
+        self.assertEqual(rc, 0)
+
+    def test_cls_convention_silent(self):
+        rc, _ = self._doc(
+            "Title\n\n```python\nfrom pkg import Point\n\n"
+            "@classmethod\ndef from_row(cls, row):\n"
+            "    return cls(row.x, row.y)\n```\n")
+        self.assertEqual(rc, 0)
+
+    def test_unbound_call_still_fires(self):
+        rc, out = self._doc(
+            "Title\n\n```python\nfrom pkg import process\n\n"
+            "iterator = (x.rstrip() for x in items)\n"
+            "frobnicate(iterator)\n```\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("frobnicate", out)
+
+
 if __name__ == "__main__":
     unittest.main()

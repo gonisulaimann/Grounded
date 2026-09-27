@@ -14,19 +14,30 @@ the repo's own JSON OpenAPI/Swagger documents. Proves the machinery
 
 ## Design: two-root verification
 
-A future pairing flag would scan one root against another's spec
-(frontend clients verified against the backend tree). The shape:
+Shipped as `scan --cross-index`:
 
-1. Build both indexes (reuse `scan_root` twice, no new parsing).
-2. Pair by manifest: the client tree's `package.json` names the API it
-   consumes (private registry URL, an `openapi:` pointer, or an
-   explicit consumes-path); no pairing evidence means no verdicts —
-   the phantom-package rule applied to roots.
-3. Run the client side of one index against the spec side of the other,
-   both directions where both sides exist.
-4. Findings carry both paths (`frontend/app.js:12` calls what
-   `backend/openapi.json` no longer defines), so either maintainer can
-   act.
+```console
+grounded scan ./frontend --cross-index ./backend --enable stale-api-ref
+```
+
+The flag itself is the pairing evidence (explicit user assertion beats
+inferred manifest pointers). Reporting stays on the primary tree so
+either maintainer runs their own mirror; the other tree contributes
+only its spec routes. No spec found anywhere: silence, exactly like
+single-tree mode.
+
+1. Build both indexes (reuse `scan_root` twice, no new parsing; the
+   other tree runs zero checkers — its specs join the route set, its
+   files are never reported).
+2. Union the route sets; verify the primary tree's clients against the
+   union. Single-tree `stale-api-ref` findings are replaced, not
+   doubled (the union can only silence, never invent).
+3. Manifest-based pairing (`package.json` naming the consumed API) and
+   symmetric reporting remain follow-ups: the explicit flag is
+   stronger evidence than any inference, and each maintainer runs
+   their own mirror.
+4. Findings name the consulted trees (`this repo's or ./backend's API
+   specs`), so either side can act.
 
 ## Non-goals (explicit)
 

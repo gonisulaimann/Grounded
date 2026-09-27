@@ -263,6 +263,18 @@ def _doc_block_known(block: list[str], language: str) -> set[str]:
             m2 = re.match(r"^\s*(?:[A-Za-z_.]+\s+)?\"([\w./-]+)\"\s*$", line)
             if m2:
                 known.add(m2.group(1).rstrip("/").split("/")[-1])
+    if language == "python":
+        # Comprehension and mid-line loop targets (`(x.rstrip() for x
+        # in input)`, `{k: v for k, v in d.items()}`): the anchored
+        # `for` pattern above only sees line-initial loops. Tuple
+        # targets split on commas; anything not a bare identifier is
+        # ignored rather than guessed.
+        for line in block:
+            for fm in re.finditer(r"\bfor\s+([A-Za-z_][\w\s,()]*?)\s+in\b", line):
+                for part in fm.group(1).replace("(", " ").replace(")", " ").split(","):
+                    name = part.strip()
+                    if re.fullmatch(r"[A-Za-z_]\w*", name or ""):
+                        known.add(name)
     # Destructured bindings: `const { a, b } = x`, `({ page }) =>`,
     # `[first, ...rest] = list`. Test-fixture params are almost always
     # destructured (`async ({ page }) =>`) and were invisible to the
@@ -335,6 +347,15 @@ def check_stale_doc_ref(facts: FileFacts, index: RepoIndex) -> list[Finding]:
             if s.startswith("."):
                 continue  # continuation chain (.then/.catch): receiver above
             code = _strip_doc_strings(_strip_doc_diff_markers(line))
+            # Trailing prose is not code (`"point": "3 4",  # split into
+            # ("3", "4")` — the `into (` inside the comment is English,
+            # not a call). Strings are already blanked above, so a `#`
+            # (python) or `//` (js/go/c) now always opens a comment.
+            # A real call can never live behind one: it would not execute.
+            if lang == "python":
+                code = code.split("#", 1)[0]
+            else:
+                code = re.split(r"(?<!:)//", code, maxsplit=1)[0]
             for m in _DOC_CALL.finditer(code):
                 full = m.group(1)
                 base = full.split(".")[-1].lstrip("$")
@@ -360,6 +381,10 @@ def check_stale_doc_ref(facts: FileFacts, index: RepoIndex) -> list[Finding]:
                     continue
                 if lang == "python" and full_root in _STDLIB_MODULES:
                     continue
+                if lang == "python" and base == "cls":
+                    continue  # classmethod convention (`cls(...)` binds the
+                    # class in examples). A repo function literally named
+                    # `cls` is out of scope: the convention dwarfs it.
                 if lang == "go" and full_root in _GO_STDLIB_PACKAGES:
                     continue  # stdlib (fmt.Printf, time.Now): not repo claims
                 if index.has_symbol(full) or index.has_symbol(base):

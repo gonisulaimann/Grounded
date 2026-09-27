@@ -9,7 +9,7 @@ grounded scan [PATH] [--format terminal|json|sarif|markdown|html] [--output FILE
               [--enable ID,...] [--disable ID,...]
               [--baseline FILE] [--show-baselined]
               [--changed [BASE]] [--cache [FILE]] [--no-index-cache] [--jobs N]
-              [--config FILE] [--no-color] [--quiet]
+              [--config FILE] [--no-color] [--quiet] [--cross-index DIR]
 grounded baseline [PATH] [--output FILE]
 grounded fix [PATH] [--dry-run]
 grounded impact SYMBOL [PATH] [--format terminal|json]

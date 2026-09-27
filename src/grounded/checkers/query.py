@@ -29,6 +29,22 @@ from ._shared import (
 from .files import _in_repo_scope
 
 
+# Ubiquitous tool/platform names: never repo-defined (and when a repo
+# does define one, the index check above already won). Query-only:
+# the checkers keep judging these strictly, because a comment claiming
+# `docker()` deserves the full absence proof, not a shrug.
+_TOOL_NAMES = frozenset({
+    "pip", "npm", "yarn", "pnpm", "brew", "apt", "yum", "dnf", "apk",
+    "git", "svn", "hg", "docker", "podman", "kubectl", "helm",
+    "curl", "wget", "ssh", "scp", "rsync", "make", "cmake", "gcc",
+    "clang", "python", "node", "deno", "bun", "ruby", "cargo",
+    "java", "javac", "mvn", "gradle", "dotnet", "php",
+    "composer", "terraform", "ansible", "vim", "nano", "emacs",
+    "tmux", "screen", "bash", "zsh", "fish", "awk", "sed", "grep",
+    "jq", "ffmpeg", "pandoc", "gcloud", "az", "aws",
+})
+
+
 def _clean_call(raw: str) -> tuple[str, str] | None:
     name = raw.strip(".,:;!?")
     is_call = name.endswith("()")
@@ -41,16 +57,27 @@ def _clean_call(raw: str) -> tuple[str, str] | None:
     return name, base
 
 
-def check_text_claims(text: str, index: RepoIndex) -> list[dict]:
+def check_text_claims(text: str, index: RepoIndex,
+                      params: frozenset[str] | None = None) -> list[dict]:
     """[{claim, kind, verdict, detail}] for code-shaped claims in text.
 
     kind is "symbol" or "file"; verdict is "known" or "unknown".
-    Reserved words, placeholders, dunders-as-prose and short names are
+    Reserved words, placeholders, tool names and short names are
     skipped silently (never claims). Dotted file paths are judged only
     in repo scope, like stale-file-ref.
+
+    `params` (function-parameter names across the tree) answer a third
+    question the index cannot: names that exist but are not definitions
+    (`log_locals` is `Console.log`'s parameter, not a function). They
+    report known with the qualifier, so an agent asking "is X real?"
+    gets the truth instead of a miss. Case works the same way: a
+    unique case-insensitive hit reports known with the actual casing
+    noted. Both are query-only leniency — the checkers stay strict,
+    because in code `spinner` and `Spinner` are different names.
     """
     out: list[dict] = []
     seen_set: set[tuple[str, str]] = set()
+    params = params or frozenset()
 
     def add(claim: str, kind: str, verdict: str, detail: str) -> None:
         key = (kind, claim)
@@ -58,6 +85,31 @@ def check_text_claims(text: str, index: RepoIndex) -> list[dict]:
             seen_set.add(key)
             out.append({"claim": claim, "kind": kind,
                         "verdict": verdict, "detail": detail})
+
+    def judge(display: str, name: str, base: str) -> None:
+        if index.has_symbol(name) or index.has_symbol(base):
+            add(display, "symbol", "known",
+                f"`{base}` is defined in this repo.")
+            return
+        if base.lower() in _TOOL_NAMES:
+            return  # ubiquitous external tool, never a repo claim
+        if base in params or name.split(".")[0] in params:
+            add(display, "symbol", "known",
+                f"`{base}` is a function parameter in this repo "
+                f"(not a standalone definition).")
+            return
+        cased = index.lower_map.get(base.lower(), set())
+        if len(cased) == 1:
+            (actual,) = cased
+            add(display, "symbol", "known",
+                f"no `{base}`, but `{actual}` is defined "
+                f"(case differs).")
+            return
+        hint = _suggest(base, index).strip()
+        detail = (f"no definition of `{base}` in {len(index.files)} "
+                  f"indexed source files."
+                  + (f" {hint}" if hint else ""))
+        add(display, "symbol", "unknown", detail)
 
     for m in _BACKTICK_SYMBOL.finditer(text):
         parsed = _clean_call(m.group(1))
@@ -70,15 +122,7 @@ def check_text_claims(text: str, index: RepoIndex) -> list[dict]:
             continue
         if _is_reserved(base, "python"):
             continue
-        if index.has_symbol(name) or index.has_symbol(base):
-            add(f"`{m.group(1)}`", "symbol", "known",
-                f"`{base}` is defined in this repo.")
-        else:
-            hint = _suggest(base, index).strip()
-            detail = (f"no definition of `{base}` in {len(index.files)} "
-                      f"indexed source files."
-                      + (f" {hint}" if hint else ""))
-            add(f"`{m.group(1)}`", "symbol", "unknown", detail)
+        judge(f"`{m.group(1)}`", name, base)
     for m in _SYMBOL_CALL.finditer(text):
         full = m.group(1)
         base = full.split(".")[-1]
@@ -90,15 +134,7 @@ def check_text_claims(text: str, index: RepoIndex) -> list[dict]:
             continue
         if f"`{full}()`" in text or f"`{base}()`" in text:
             continue  # already judged via the backticked form
-        if index.has_symbol(full) or index.has_symbol(base):
-            add(f"{full}()", "symbol", "known",
-                f"`{base}` is defined in this repo.")
-        else:
-            hint = _suggest(base, index).strip()
-            detail = (f"no definition of `{base}` in {len(index.files)} "
-                      f"indexed source files."
-                      + (f" {hint}" if hint else ""))
-            add(f"{full}()", "symbol", "unknown", detail)
+        judge(f"{full}()", full, base)
     for m in _FILE_REF.finditer(text):
         ref = m.group(1)
         segs = [s.lower() for s in re.split(r"[/.]", ref)]

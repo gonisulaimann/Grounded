@@ -92,36 +92,66 @@ def find_readme(tree: Path) -> Path | None:
     return None
 
 
-def check_package(tree: Path) -> dict:
-    """Run the doc-example check of tree's README against its code."""
+def find_doc_pages(tree: Path, limit: int = 20) -> list[Path]:
+    """Bounded docs/-tree crawl (grid roadmap step 1): Markdown pages
+    where the real examples live. Depth- and count-capped so a docs
+    monorepo cannot explode the pilot."""
+    out: list[Path] = []
+    for base in ("docs", "doc", "documentation", "guide", "guides"):
+        d = tree / base
+        if not d.is_dir():
+            continue
+        for p in sorted(d.rglob("*.md")):
+            if len(p.relative_to(tree).parts) > 5:
+                continue
+            out.append(p)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def check_package(tree: Path, crawl_docs: bool = False) -> dict:
+    """Run the doc-example check of tree's README (plus, optionally, a
+    bounded docs/ crawl) against its code."""
     from grounded.config import Config
     from grounded.parsers import parse_file
     from grounded.scanner import scan_root
     from grounded.checkers.docs import check_stale_doc_ref
+    pages = []
     readme = find_readme(tree)
-    if readme is None:
+    if readme is not None:
+        pages.append(readme)
+    if crawl_docs:
+        pages.extend(p for p in find_doc_pages(tree)
+                     if p not in pages)
+    if not pages:
         return {"readme": None, "calls": [], "unknown": []}
-    try:
-        text = readme.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return {"readme": readme.name, "calls": [], "unknown": [],
-                "error": "unreadable"}
     _, _, index = scan_root(tree, Config())
-    facts = parse_file(readme, readme.relative_to(tree).as_posix(), text)
-    findings = check_stale_doc_ref(facts, index)
-    calls = sorted({f.claim.strip("`") for f in findings})
-    return {"readme": readme.relative_to(tree).as_posix(),
-            "calls": calls,
-            "unknown": [{"call": f.claim.strip("`"), "line": f.line,
-                         "title": f.title} for f in findings]}
+    calls: set[str] = set()
+    unknown: list[dict] = []
+    for page in pages:
+        try:
+            text = page.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        facts = parse_file(page, page.relative_to(tree).as_posix(), text)
+        for f in check_stale_doc_ref(facts, index):
+            calls.add(f.claim.strip("`"))
+            unknown.append({"call": f.claim.strip("`"), "line": f.line,
+                            "file": page.relative_to(tree).as_posix(),
+                            "title": f.title})
+    return {"readme": readme.relative_to(tree).as_posix() if readme else None,
+            "pages": len(pages),
+            "calls": sorted(calls),
+            "unknown": unknown}
 
 
 def run_package(name: str, version: str | None = None,
-                local: Path | None = None) -> dict:
+                local: Path | None = None, crawl_docs: bool = False) -> dict:
     report: dict = {"package": name, "version": version}
     if local is not None:
         report["version"] = "local"
-        out = check_package(local)
+        out = check_package(local, crawl_docs=crawl_docs)
         report.update(out)
         return report
     with tempfile.TemporaryDirectory(prefix="grounded-registry-") as td:
@@ -141,7 +171,7 @@ def run_package(name: str, version: str | None = None,
         except Exception:
             actual_version = version
         report["version"] = actual_version or version
-        report.update(check_package(tree))
+        report.update(check_package(tree, crawl_docs=crawl_docs))
         return report
 
 
@@ -149,18 +179,21 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("packages", nargs="*", help="PyPI names (pin with ==)")
     ap.add_argument("--local", default=None, help="scan a local dir as a package")
+    ap.add_argument("--crawl-docs", action="store_true",
+                    help="also check a bounded docs/ tree, not just the README")
     ap.add_argument("--json", default=None, help="write full report JSON")
     args = ap.parse_args(argv)
     reports = []
     if args.local:
-        reports.append(run_package(Path(args.local).name, local=Path(args.local)))
+        reports.append(run_package(Path(args.local).name, local=Path(args.local),
+                                   crawl_docs=args.crawl_docs))
     for spec in args.packages:
         if "==" in spec:
             name, version = spec.split("==", 1)
         else:
             name, version = spec, None
         print(f"registry: {spec} ...", flush=True)
-        reports.append(run_package(name, version))
+        reports.append(run_package(name, version, crawl_docs=args.crawl_docs))
     total_unknown = sum(len(r.get("unknown", [])) for r in reports)
     print(f"registry: {len(reports)} package(s), "
           f"{total_unknown} unknown documented call(s) "

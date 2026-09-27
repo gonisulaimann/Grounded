@@ -5,6 +5,23 @@ All notable changes to `grounded` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **`scan --cross-index DIR`**: two-root API verification for
+  `stale-api-ref` (the flag itself is the pairing evidence).
+- Doc-example bindings: comprehension targets, trailing-comment
+  prose, and the `cls` convention stay silent.
+- `check_text` query leniency: function parameters answer as known
+  (qualified), unique case-insensitive hits note the casing, tool
+  names (`pip`, `git`, `docker`, …) stay silent. Checkers unchanged
+  and strict.
+
+### Added
+- **`scan --cross-index DIR`**: two-root API verification. The other
+  tree's OpenAPI/Swagger routes join the route set `stale-api-ref`
+  checks against; the flag itself is the pairing evidence, reporting
+  stays on the primary tree. A client calling a route the other tree
+  removed now fires with cross-tree evidence.
+
 ## [0.17.0] - 2026-09-27
 
 ### Added

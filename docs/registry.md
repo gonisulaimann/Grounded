@@ -35,11 +35,30 @@ documented in the harness docstring: sdist/wheel only, README only,
 Python fences only, and every unknown is a *candidate* requiring human
 classification — the harness records, it never accuses.
 
+## Docs-crawl round (2026-09-27, click + attrs, 36 pages)
+
+Extending the pilot to bounded `docs/` trees (20 files max, depth 5):
+
+| Package | Pages | Unknown | Classification |
+| --- | ---: | ---: | --- |
+| click | 21 | 4 | narrative residue: tutorial-invented DB helpers (`open_database()`, `db.save()`) in a "For example" block beyond the 1-line framing window |
+| attrs | 15 | 3 | narrative residue: user-supplied `WebClient` example class |
+
+Fixed by this round (were firing, now silent with positive controls):
+comprehension loop variables (`x.rstrip()`), trailing-comment prose
+(`split into (...)` in `#` comments), the `cls()` classmethod
+convention. Remaining 7 are one class: invented tutorial helpers
+with no example-frame marker in reach. The 1-line framing window is
+deliberate (wider windows launder real staleness); translations and
+unmarked narrative stay residue by design.
+
 ## Next steps toward the grid
 
-1. Crawl `docs/` trees (bounded depth, same checker).
-2. Version-pair runs: N vs N-1 of the same package, diffing unknowns
-   (drift appears at release boundaries, not in steady state).
-3. Maintainer-sized output: one finding = file:line + evidence + fix,
+1. ~~Version-pair runs~~ — piloted 2026-09-27: click 8.4.2 → 8.5.0
+   shows identical unknown sets (the 4 narrative-residue calls, stable
+   across the release). Negative result, honestly recorded: stable
+   scaffolding, not drift. Real rot would move between versions; the
+   method is ready for a pair where it does.
+2. Maintainer-sized output: one finding = file:line + evidence + fix,
    ready to paste as an upstream issue.
-4. Nightly schedule + truth badges (only after 1–3 prove signal).
+3. Nightly schedule + truth badges (only after 1–2 prove signal).

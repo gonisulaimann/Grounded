@@ -99,9 +99,9 @@ def _url_path(raw: str) -> str | None:
     return s or None
 
 
-def _collect_routes(index: RepoIndex) -> set[str] | None:
-    """Union of route templates from every JSON spec in the tree.
-    None when the repo has no spec to judge against."""
+def routes_of_index(index: RepoIndex) -> tuple[bool, set[str]]:
+    """(found_any_spec, route templates) from one index. Split out so
+    cross-tree verification can union several indexes' specs."""
     texts = getattr(index, "_texts", None)
     root = getattr(index, "root", None)
     found = False
@@ -121,16 +121,16 @@ def _collect_routes(index: RepoIndex) -> set[str] | None:
             found = True
             routes |= got
     if found:
-        return routes
+        return True, routes
     # Fallback: read candidate spec files from disk (index may not hold
     # texts, e.g. single-file LSP indexes).
     from pathlib import Path
     try:
         base_root = Path(str(root)) if root is not None else None
     except Exception:
-        return None
+        return False, set()
     if base_root is None:
-        return None
+        return False, set()
     for name in ("openapi.json", "swagger.json"):
         for cand in [base_root / name, base_root / "docs" / name,
                      base_root / "spec" / name, base_root / "api" / name]:
@@ -142,17 +142,34 @@ def _collect_routes(index: RepoIndex) -> set[str] | None:
             if got is not None:
                 found = True
                 routes |= got
+    return found, routes
+
+
+def _collect_routes(index: RepoIndex) -> set[str] | None:
+    """Union of route templates from every JSON spec in the tree.
+    None when the repo has no spec to judge against."""
+    found, routes = routes_of_index(index)
     return routes if found else None
 
 
-def check_stale_api_ref(facts: FileFacts, index: RepoIndex) -> list[Finding]:
+def check_stale_api_ref(facts: FileFacts, index: RepoIndex,
+                        extra_routes: set[str] | None = None,
+                        scope_note: str | None = None) -> list[Finding]:
     """HTTP-call string literals with no matching route in the repo's
-    own OpenAPI/Swagger documents."""
+    own OpenAPI/Swagger documents.
+
+    `extra_routes` unions another tree's specs into the route set
+    (two-root verification); `scope_note` names the consulted trees in
+    evidence. Both default to single-tree behavior.
+    """
     if facts.language not in ("python", "javascript"):
         return []
     routes = _collect_routes(index)
+    if extra_routes:
+        routes = (routes or set()) | set(extra_routes)
     if not routes:
         return []
+    scope = scope_note or "this repo's API spec"
     findings: list[Finding] = []
     skip: set[int] = set()
     for c in facts.comments:
@@ -171,9 +188,9 @@ def check_stale_api_ref(facts: FileFacts, index: RepoIndex) -> list[Finding]:
             findings.append(Finding(
                 path=facts.path, line=lineno, end_line=lineno,
                 checker="stale-api-ref", severity="lie",
-                title=f"Client calls `{method.upper()} {path}` with no matching route in this repo's API spec",
+                title=f"Client calls `{method.upper()} {path}` with no matching route in {scope}",
                 claim=f"{method.upper()} {path}",
-                evidence=f"no route in the repo's OpenAPI/Swagger documents matches `{path}` "
+                evidence=f"no route in {scope} matches `{path}` "
                          f"(templates compared segment-wise).",
                 fix="Update the client path or the spec; one of them moved without the other.",
                 confidence=0.75,
